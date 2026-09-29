@@ -28,8 +28,14 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['admin', 'loan_officer', 'customer'],
-      default: 'customer',
+      // SRS SEC-04 default shop roles
+      enum: ['owner', 'branch_manager', 'cashier', 'technician', 'accountant'],
+      default: 'owner',
+    },
+    shopName: {
+      type: String,
+      trim: true,
+      default: '',
     },
     phone: {
       type: String,
@@ -47,6 +53,17 @@ const userSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    // SRS SEC-10: lock for 15 minutes after 5 failed logins
+    failedLogins: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
+    lockUntil: {
+      type: Date,
+      default: null,
+      select: false,
     },
   },
   {

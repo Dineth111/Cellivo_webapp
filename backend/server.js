@@ -39,10 +39,11 @@ if (process.env.NODE_ENV !== 'production') {
 // Root Route
 app.get('/', (req, res) => {
   res.json({
-    message: '🚀 Microfinance MERN Backend API is running',
+    message: 'Cellivo API is running',
     version: '1.0.0',
     endpoints: {
       health: '/api/health',
+      auth: '/api/auth',
       customers: '/api/customers',
     },
   });

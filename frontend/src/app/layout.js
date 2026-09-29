@@ -1,24 +1,19 @@
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Plus_Jakarta_Sans } from 'next/font/google';
 import './globals.css';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const jakarta = Plus_Jakarta_Sans({
+  variable: '--font-jakarta',
   subsets: ['latin'],
 });
 
 export const metadata = {
-  title: 'Microfinance Core ERP | MERN Next.js Boilerplate',
-  description: 'Enterprise Microfinance Full-Stack Boilerplate powered by Next.js App Router, Express, and MongoDB Atlas.',
+  title: 'Cellivo | Mobile Shop POS',
+  description: 'Cloud POS and shop management for mobile phone retailers and repair centres.',
 };
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={jakarta.variable}>
       <body>{children}</body>
     </html>
   );

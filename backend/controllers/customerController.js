@@ -4,19 +4,22 @@ import Customer from '../models/Customer.js';
 // @route   GET /api/customers
 export const getCustomers = async (req, res, next) => {
   try {
-    const { search, status } = req.query;
+    const { search, type } = req.query;
     const filter = {};
 
     if (search) {
+      // Escape user input so it is matched literally, not as a regex.
+      const term = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { nic: { $regex: search, $options: 'i' } },
-        { phone: { $regex: search, $options: 'i' } },
+        { name: { $regex: term, $options: 'i' } },
+        { phone: { $regex: term, $options: 'i' } },
+        { email: { $regex: term, $options: 'i' } },
+        { nic: { $regex: term, $options: 'i' } },
       ];
     }
 
-    if (status && status !== 'all') {
-      filter.status = status;
+    if (type && type !== 'all') {
+      filter.type = type;
     }
 
     const customers = await Customer.find(filter).sort({ createdAt: -1 });
@@ -54,16 +57,9 @@ export const getCustomerById = async (req, res, next) => {
 // @route   POST /api/customers
 export const createCustomer = async (req, res, next) => {
   try {
-    const { name, nic, phone, loanAmount, status, notes } = req.body;
+    const { name, phone, email, address, nic, type, notes } = req.body;
 
-    const customer = await Customer.create({
-      name,
-      nic,
-      phone,
-      loanAmount: Number(loanAmount) || 0,
-      status: status || 'active',
-      notes,
-    });
+    const customer = await Customer.create({ name, phone, email, address, nic, type, notes });
 
     res.status(201).json({
       success: true,

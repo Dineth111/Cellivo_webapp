@@ -5,12 +5,12 @@ import { generateToken } from '../middleware/authMiddleware.js';
 // @route   POST /api/auth/register
 export const register = async (req, res, next) => {
   try {
-    const { name, email, password, role, phone } = req.body;
+    const { name, shopName, email, password, phone } = req.body;
 
-    if (!name || !email || !password) {
+    if (!name || !shopName || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide full name, email, and password',
+        message: 'Please provide full name, shop name, email, and password',
       });
     }
 
@@ -35,7 +35,9 @@ export const register = async (req, res, next) => {
       name: name.trim(),
       email: email.toLowerCase().trim(),
       password,
-      role: role && ['admin', 'loan_officer', 'customer'].includes(role) ? role : 'customer',
+      // Self sign-up is always the shop owner (SRS ACC-01); staff are added by the owner.
+      role: 'owner',
+      shopName: shopName.trim(),
       phone: phone ? phone.trim() : '',
       lastLogin: new Date(),
     });
@@ -52,6 +54,7 @@ export const register = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        shopName: user.shopName,
         phone: user.phone,
         lastLogin: user.lastLogin,
         createdAt: user.createdAt,
@@ -76,7 +79,7 @@ export const login = async (req, res, next) => {
     }
 
     // Check for user (must explicitly select password since it has select: false in schema)
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password +failedLogins +lockUntil');
 
     if (!user) {
       return res.status(401).json({
@@ -85,14 +88,30 @@ export const login = async (req, res, next) => {
       });
     }
 
+    if (user.lockUntil && user.lockUntil > Date.now()) {
+      return res.status(423).json({
+        success: false,
+        message: 'Too many failed attempts. Try again in 15 minutes.',
+      });
+    }
+
     // Check password match
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
+      user.failedLogins += 1;
+      if (user.failedLogins >= 5) {
+        user.failedLogins = 0;
+        user.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
+      }
+      await user.save({ validateBeforeSave: false });
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
       });
     }
+
+    user.failedLogins = 0;
+    user.lockUntil = null;
 
     if (!user.isActive) {
       return res.status(403).json({
@@ -117,6 +136,7 @@ export const login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        shopName: user.shopName,
         phone: user.phone,
         lastLogin: user.lastLogin,
         createdAt: user.createdAt,
@@ -170,6 +190,7 @@ export const updateProfile = async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        shopName: user.shopName,
         phone: user.phone,
         lastLogin: user.lastLogin,
         updatedAt: user.updatedAt,

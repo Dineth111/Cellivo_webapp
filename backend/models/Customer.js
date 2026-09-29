@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 
+// SRS CRM-01
 const customerSchema = new mongoose.Schema(
   {
     name: {
@@ -7,26 +8,31 @@ const customerSchema = new mongoose.Schema(
       required: [true, 'Customer name is required'],
       trim: true,
     },
-    nic: {
-      type: String,
-      required: [true, 'National Identity Card (NIC) is required'],
-      trim: true,
-    },
     phone: {
       type: String,
       required: [true, 'Phone number is required'],
       trim: true,
     },
-    loanAmount: {
-      type: Number,
-      required: [true, 'Loan amount is required'],
-      min: [0, 'Loan amount cannot be negative'],
-      default: 0,
-    },
-    status: {
+    email: {
       type: String,
-      enum: ['pending', 'active', 'settled', 'defaulted'],
-      default: 'active',
+      trim: true,
+      lowercase: true,
+      default: '',
+    },
+    address: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    nic: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    type: {
+      type: String,
+      enum: ['retail', 'wholesale'],
+      default: 'retail',
     },
     notes: {
       type: String,
