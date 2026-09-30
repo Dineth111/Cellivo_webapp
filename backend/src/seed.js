@@ -24,6 +24,10 @@ const emailOf = (role) => `${role.replace('_', '')}@cellivo.lk`;
 
 await mongoose.connect(config.mongoUri);
 
+// Demo users from before multi-tenancy have no tenantId/passwordHash and can never log in: remove them.
+const legacy = await User.collection.deleteMany({ email: /@cellivo.lk$/, tenantId: { $exists: false } });
+if (legacy.deletedCount) console.log(`removed ${legacy.deletedCount} legacy demo user(s)`);
+
 if (await runAsPlatform(async () => await User.exists({ email: emailOf('owner') }))) {
   console.log('skip    demo shop already exists');
 } else {
