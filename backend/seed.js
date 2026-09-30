@@ -7,6 +7,11 @@ import User from './models/User.js';
 
 dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.env') });
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('Refusing to seed demo users when NODE_ENV=production.');
+  process.exit(1);
+}
+
 const PASSWORD = 'Cellivo@123';
 const users = [
   { name: 'Nimal Perera', role: 'owner' },

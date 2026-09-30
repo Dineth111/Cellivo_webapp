@@ -3,7 +3,7 @@ import User from '../models/User.js';
 
 // Generate JWT token
 export const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET || 'default_jwt_secret_dev', {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };
@@ -29,7 +29,7 @@ export const protect = async (req, res, next) => {
   try {
     const decoded = jwt.verify(
       token,
-      process.env.JWT_SECRET || 'default_jwt_secret_dev'
+      process.env.JWT_SECRET
     );
 
     req.user = await User.findById(decoded.id).select('-password');

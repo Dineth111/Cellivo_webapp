@@ -2,6 +2,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import morgan from 'morgan';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import connectDB from './config/db.js';
@@ -29,7 +31,7 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 if (process.env.NODE_ENV !== 'production') {
@@ -51,7 +53,11 @@ app.get('/', (req, res) => {
 
 // API Routes
 app.use('/api/health', healthRoutes);
-app.use('/api/auth', authRoutes);
+app.use(
+  '/api/auth',
+  rateLimit({ windowMs: 15 * 60 * 1000, limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || 100, standardHeaders: true, legacyHeaders: false }),
+  authRoutes
+);
 app.use('/api/customers', customerRoutes);
 
 // Error Handling Middleware
