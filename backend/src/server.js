@@ -1,71 +1,23 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import morgan from 'morgan';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { config, assertConfig } from './core/config.js';
 import connectDB from './core/db.js';
-import customerRoutes from './modules/customers/customers.routes.js';
-import healthRoutes from './modules/health/health.routes.js';
-import authRoutes from './modules/auth/auth.routes.js';
-import { errorHandler } from './core/errors.js';
+import { createApp } from './app.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load .env from backend directory (or root fallback)
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config(); // fallback if root has .env
-
-// Connect to MongoDB Atlas
-connectDB();
-
-const app = express();
-
-// Middleware
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    credentials: true,
-  })
-);
-app.use(express.json({ limit: '100kb' }));
-app.use(express.urlencoded({ extended: true }));
-
-if (process.env.NODE_ENV !== 'production') {
-  app.use(morgan('dev'));
+// Fail closed: never start with missing secrets.
+try {
+  assertConfig();
+} catch (err) {
+  console.error(`${err.message}. Refusing to start.`);
+  process.exit(1);
 }
 
-// Root Route
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Cellivo API is running',
-    version: '1.0.0',
-    endpoints: {
-      health: '/api/health',
-      auth: '/api/auth',
-      customers: '/api/customers',
-    },
-  });
-});
+try {
+  await connectDB();
+} catch (err) {
+  console.error(`[MongoDB Connection Error]: ${err.message}`);
+  process.exit(1);
+}
 
-// API Routes
-app.use('/api/health', healthRoutes);
-app.use(
-  '/api/auth',
-  rateLimit({ windowMs: 15 * 60 * 1000, limit: Number(process.env.AUTH_RATE_LIMIT_MAX) || 100, standardHeaders: true, legacyHeaders: false }),
-  authRoutes
-);
-app.use('/api/customers', customerRoutes);
-
-// Error Handling Middleware
-app.use(errorHandler);
-
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`⚡ Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  console.log(`🔗 API Base: http://localhost:${PORT}`);
+createApp().listen(config.port, () => {
+  console.log(`⚡ Server running in ${config.env} mode on port ${config.port}`);
+  console.log(`🔗 API Base: http://localhost:${config.port}`);
 });

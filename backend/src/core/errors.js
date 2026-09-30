@@ -51,6 +51,7 @@ export const errorHandler = (err, req, res, next) => {
     success: false,
     message,
     ...(typeof err.code === 'string' && { code: err.code }),
+    ...(err.data && { data: err.data }),
     ...(config.isDev && status >= 500 && { stack: err.stack }),
   });
 };

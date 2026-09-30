@@ -1,36 +1,44 @@
-// Creates one demo user per shop role. Safe to re-run: existing emails are skipped.
-import dotenv from 'dotenv';
+// Creates one demo shop (tenant) with one user per default role. Safe to re-run: skipped if it exists.
 import mongoose from 'mongoose';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import User from './models/User.js';
+import { config, assertConfig } from './core/config.js';
+import { provisionTenant } from './modules/tenants/provisioning.service.js';
+import User from './modules/users/User.model.js';
+import Role from './modules/roles/Role.model.js';
+import { runAsPlatform, runWithContext } from './core/tenantContext.js';
+import { hashPassword } from './core/password.js';
 
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
-
-if (process.env.NODE_ENV === 'production') {
+if (config.env === 'production') {
   console.error('Refusing to seed demo users when NODE_ENV=production.');
   process.exit(1);
 }
+assertConfig();
 
 const PASSWORD = 'Cellivo@123';
-const users = [
-  { name: 'Nimal Perera', role: 'owner' },
+const staff = [
   { name: 'Kasun Silva', role: 'branch_manager' },
   { name: 'Dilini Fernando', role: 'cashier' },
   { name: 'Ruwan Jayasinghe', role: 'technician' },
   { name: 'Saman Kumara', role: 'accountant' },
 ];
+const emailOf = (role) => `${role.replace('_', '')}@cellivo.lk`;
 
-await mongoose.connect(process.env.MONGO_URI);
+await mongoose.connect(config.mongoUri);
 
-for (const { name, role } of users) {
-  const email = `${role.replace('_', '')}@cellivo.lk`;
-  if (await User.exists({ email })) {
-    console.log(`skip    ${email}`);
-    continue;
-  }
-  await User.create({ name, email, password: PASSWORD, role, shopName: 'Demo Mobile' });
-  console.log(`created ${email}`);
+if (await runAsPlatform(async () => await User.exists({ email: emailOf('owner') }))) {
+  console.log('skip    demo shop already exists');
+} else {
+  const { tenant, branch, user } = await provisionTenant({
+    ownerName: 'Nimal Perera', shopName: 'Demo Mobile', email: emailOf('owner'), password: PASSWORD, phone: '0771234567',
+  });
+  console.log(`created ${user.email}`);
+  await runWithContext({ tenantId: tenant._id }, async () => {
+    const roles = await Role.find();
+    const passwordHash = await hashPassword(PASSWORD);
+    for (const { name, role } of staff) {
+      const u = await User.create({ name, email: emailOf(role), passwordHash, roleId: roles.find((r) => r.key === role)._id, branchIds: [branch._id] });
+      console.log(`created ${u.email}`);
+    }
+  });
 }
 
 console.log(`\nPassword for all: ${PASSWORD}`);
