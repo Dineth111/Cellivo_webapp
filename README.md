@@ -57,7 +57,7 @@ The platform supports multiple shops/tenants while maintaining tenant-level data
 * Trial management
 * Billing and payments
 
-**Developer:** DEV 01
+**Owners:** Dev 1 (login, users, roles, audit log) · Dev 2 (registration, trial, subscriptions, billing)
 
 ---
 
@@ -86,7 +86,7 @@ The platform supports multiple shops/tenants while maintaining tenant-level data
 * Customer history
 * Loyalty management
 
-**Developer:** DEV 02
+**Owners:** Dev 3 (POS, returns, trade-ins, credit, installments, loyalty) · Dev 5 (customer records)
 
 ---
 
@@ -115,7 +115,7 @@ The platform supports multiple shops/tenants while maintaining tenant-level data
 * Branch management
 * Stock transfers
 
-**Developer:** DEV 03
+**Owners:** Dev 4 (products, stock, IMEI, purchasing, suppliers, stock transfers) · Dev 1 (branches)
 
 ---
 
@@ -167,7 +167,7 @@ The platform supports multiple shops/tenants while maintaining tenant-level data
 * Payroll
 * Payslips
 
-**Developer:** DEV 04
+**Owners:** Dev 5 (repairs) · Dev 3 (finance) · Dev 1 (staff, commissions, payroll)
 
 ---
 
@@ -228,21 +228,37 @@ The platform supports multiple shops/tenants while maintaining tenant-level data
 * WhatsApp
 * Document/invoice templates
 
-**Developer:** DEV 05
+**Owners:** Dev 5 (dashboard, reports, SMS/email notifications) · Dev 2 (platform admin, payment gateway) · Dev 4 (WooCommerce) · Dev 3 (printing)
 
 ---
 
 # 👨‍💻 Development Team Structure
 
-The project is divided into five main development components.
+The project is divided into five full-stack areas (database to screen). Details, timeline and dependencies: the Cellivo Development Work Allocation document. Function IDs (F-xx, A-xx) refer to the FRS.
 
-| Developer | Component          | Main Responsibilities                                             |
-| --------- | ------------------ | ----------------------------------------------------------------- |
-| DEV 01    | Account & Security | Authentication, users, roles, permissions, subscriptions, billing |
-| DEV 02    | POS & CRM          | POS, sales, invoices, customers, credit, installments, loyalty    |
-| DEV 03    | Inventory          | Products, stock, IMEI, purchasing, suppliers, branches            |
-| DEV 04    | Operations         | Repairs, finance, staff, commissions, payroll                     |
-| DEV 05    | Analytics & Admin  | Dashboard, reports, integrations, platform administration         |
+| Developer | Area | Main responsibilities |
+| --------- | ---- | --------------------- |
+| Dev 1 (tech lead) | Platform core and security | Project setup, multi-tenancy, F-03 login and security, F-04 users/roles/permissions, audit log, F-19 shop settings, F-16 branches (core), F-15 staff and payroll |
+| Dev 2 | Account portal, billing and platform admin | Shared UI library, F-01 registration and trial, F-02 subscriptions and billing, F-20 portal home, plan-limit service, A-01 to A-16 admin dashboard, public website hooks |
+| Dev 3 | POS, sales and money | F-09 POS sale, printing, F-10 returns/trade-ins/wholesale, F-11 credit and installments, F-14 cash drawer and finance, ledger service, loyalty |
+| Dev 4 | Inventory, IMEI and purchasing | F-06 products and inventory, F-07 IMEI tracking, barcode labels, F-08 purchasing and suppliers, stock transfers, stock service, WooCommerce sync |
+| Dev 5 | Repairs, customers, notifications, dashboard and reports | F-12 repairs and public status page, F-13 customers, F-18 notifications, F-05 shop dashboard, F-17 reports |
+
+Shared services and who provides them: permission/tenant context/audit (Dev 1), UI library and plan limits (Dev 2), ledger (Dev 3), stock service (Dev 4), notifications (Dev 5).
+
+## Running the backend
+
+```bash
+cd backend
+cp .env.example .env      # fill in MONGO_URI and JWT_SECRET (the server refuses to start without them)
+npm install
+npm run dev               # API on http://localhost:5000
+npm run seed              # demo shop, password Cellivo@123 (refuses NODE_ENV=production)
+npm test                  # Vitest + in-memory MongoDB replica set (first run downloads mongod)
+npm run coverage
+```
+
+Platform core docs: [docs/architecture/tenancy.md](docs/architecture/tenancy.md), [docs/api/core.md](docs/api/core.md).
 
 ---
 
@@ -300,13 +316,10 @@ cellivo/
 │   └── admin/
 │
 ├── backend/
-│   ├── auth/
-│   ├── pos/
-│   ├── inventory/
-│   ├── repairs/
-│   ├── finance/
-│   ├── reports/
-│   └── admin/
+│   └── src/
+│       ├── core/            # config, db, tenant context, auth, permissions, audit, errors (Dev 1)
+│       └── modules/         # one folder per feature: auth, tenants, branches, users, roles,
+│                            #   audit, customers, ... (models, service, controller, routes)
 │
 ├── database/
 │   ├── migrations/
@@ -498,33 +511,13 @@ Recommended API grouping:
 
 # 🌿 Git Branching Strategy
 
-Each developer should work on their own feature branches.
+`main` is protected. Every change is made on a branch named after its FRS function and merged to `main` through a reviewed pull request (one approval; reviewer pairs are in the allocation document).
 
 ```text
-main
- │
- ├── develop
- │
- ├── feature/dev01-auth
- ├── feature/dev02-pos
- ├── feature/dev03-inventory
- ├── feature/dev04-repairs
- └── feature/dev05-dashboard
-```
-
-### Branch Naming
-
-```text
-feature/dev01-auth
-feature/dev01-users
-feature/dev02-pos
-feature/dev02-customers
-feature/dev03-inventory
-feature/dev03-purchasing
-feature/dev04-repairs
-feature/dev04-finance
-feature/dev05-reports
-feature/dev05-admin
+feature/F-xx-short-name     e.g. feature/F-09-split-payments
+feature/A-xx-short-name     e.g. feature/A-05-plan-editor
+fix/short-name
+docs/short-name
 ```
 
 ---
@@ -584,7 +577,7 @@ docs: add inventory setup guide
 Before creating a Pull Request:
 
 ```text
-1. Pull latest develop branch
+1. Pull latest main branch
 2. Resolve conflicts
 3. Run the application
 4. Test your feature
@@ -784,42 +777,29 @@ The FRS and SRS should be treated as the primary functional and software require
 # 🔗 Component Dependencies
 
 ```text
-                    DEV 01
-             Authentication & Access
-                      │
-          ┌───────────┼───────────┐
-          ▼           ▼           ▼
-       DEV 02       DEV 03      DEV 04
-        POS        Inventory    Operations
-          │           │           │
-          └───────────┼───────────┘
-                      ▼
-                    DEV 05
-             Dashboard / Reports
-                / Admin / APIs
+                     Dev 1
+        Tenant context · permissions · audit
+                        │
+   ┌────────────┬───────┴──────┬─────────────┐
+   ▼            ▼              ▼             ▼
+ Dev 2        Dev 3          Dev 4         Dev 5
+ UI library   Ledger /       Stock /       Notifications
+ Plan limits  payments       IMEI API
+   └────────────┴──────┬───────┴─────────────┘
+                       ▼
+        Dev 5 dashboard and reports read everyone's data
 ```
 
-### Important Integration Points
+### Important integration points
 
-**DEV 02 ↔ DEV 03**
-
-POS requires product, inventory, and IMEI information.
-
-**DEV 02 ↔ DEV 04**
-
-Sales and customer payments affect finance.
-
-**DEV 03 ↔ DEV 04**
-
-Repair parts and stock usage affect inventory.
-
-**DEV 01 ↔ All Developers**
-
-All protected modules depend on authentication, users, roles, permissions, tenant, and branch context.
-
-**DEV 05 ↔ All Developers**
-
-Dashboard and reports consume data from the core modules.
+| From | To | Why |
+| ---- | -- | --- |
+| Dev 3 POS | Dev 4 stock service | Sales need products and IMEIs; only the stock service changes stock |
+| Dev 4 purchasing, Dev 5 repair invoices | Dev 3 ledger | Only the ledger service posts money |
+| Dev 2, 3, 4 | Dev 5 notification service | Sign-up emails, receipts, low-stock alerts |
+| Everyone | Dev 1 core | Tenant context, `requirePermission`, audit log |
+| Everyone | Dev 2 | Shared UI components, plan-limit service |
+| Dev 5 reports | Dev 3, 4, 5 data | Sales, stock and repair data |
 
 ---
 
