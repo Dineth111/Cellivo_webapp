@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import User from './models/User.js';
 
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.env') });
+dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
 
 if (process.env.NODE_ENV === 'production') {
   console.error('Refusing to seed demo users when NODE_ENV=production.');

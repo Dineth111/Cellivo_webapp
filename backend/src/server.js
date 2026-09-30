@@ -6,17 +6,17 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import connectDB from './config/db.js';
-import customerRoutes from './routes/customerRoutes.js';
-import healthRoutes from './routes/healthRoutes.js';
-import authRoutes from './routes/authRoutes.js';
-import { errorHandler } from './middleware/errorHandler.js';
+import connectDB from './core/db.js';
+import customerRoutes from './modules/customers/customers.routes.js';
+import healthRoutes from './modules/health/health.routes.js';
+import authRoutes from './modules/auth/auth.routes.js';
+import { errorHandler } from './core/errors.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load .env from backend directory (or root fallback)
-dotenv.config({ path: path.resolve(__dirname, '.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config(); // fallback if root has .env
 
 // Connect to MongoDB Atlas

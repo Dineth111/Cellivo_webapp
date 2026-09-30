@@ -5,8 +5,8 @@ import {
   createCustomer,
   updateCustomer,
   deleteCustomer,
-} from '../controllers/customerController.js';
-import { protect } from '../middleware/authMiddleware.js';
+} from './customers.controller.js';
+import { protect } from '../../core/auth.js';
 
 const router = express.Router();
 

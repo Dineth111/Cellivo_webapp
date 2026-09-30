@@ -1,5 +1,5 @@
-import User from '../models/User.js';
-import { generateToken } from '../middleware/authMiddleware.js';
+import User from '../users/User.model.js';
+import { generateToken } from '../../core/auth.js';
 
 // @desc    Register a new user
 // @route   POST /api/auth/register
