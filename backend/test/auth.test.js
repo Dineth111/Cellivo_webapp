@@ -194,3 +194,11 @@ describe('startup and seed safety', () => {
     expect(notFound.status).toBe(404);
   });
 });
+
+describe('legacy records', () => {
+  it('a pre-tenancy user (no tenantId / passwordHash) gets 401, not 500', async () => {
+    await User.collection.insertOne({ name: 'Old', email: 'old@shop.lk', password: '$2a$10$abcdefghijklmnopqrstuv', role: 'owner' });
+    const res = await login('old@shop.lk');
+    expect(res.status).toBe(401);
+  });
+});

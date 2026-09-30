@@ -17,7 +17,8 @@ let dummyHash; // compared against when the email is unknown so timing does not 
 
 export async function login({ email, password }, meta = {}) {
   const user = await runAsPlatform(async () => await User.findOne({ email }).select('+passwordHash +lockUntil'));
-  if (!user) {
+  // pre-tenancy records (no tenantId / passwordHash) cannot log in: treat as unknown
+  if (!user || !user.tenantId || !user.passwordHash) {
     dummyHash ??= await hashPassword('dummy-password-1');
     await verifyPassword(password, dummyHash);
     throw unauthorized(LOGIN_FAILED);
