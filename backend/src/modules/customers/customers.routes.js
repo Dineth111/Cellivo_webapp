@@ -1,18 +1,16 @@
 import express from 'express';
-import {
-  getCustomers,
-  getCustomerById,
-  createCustomer,
-  updateCustomer,
-  deleteCustomer,
-} from './customers.controller.js';
+import * as c from './customers.controller.js';
 import { protect } from '../../core/auth.js';
+import { requirePermission } from '../../core/permissions.js';
+import { wrap } from '../../core/errors.js';
 
 const router = express.Router();
-
 router.use(protect);
 
-router.route('/').get(getCustomers).post(createCustomer);
-router.route('/:id').get(getCustomerById).put(updateCustomer).delete(deleteCustomer);
+router.get('/', requirePermission('customers.view'), wrap(c.getCustomers));
+router.post('/', requirePermission('customers.create'), wrap(c.createCustomer));
+router.get('/:id', requirePermission('customers.view'), wrap(c.getCustomerById));
+router.put('/:id', requirePermission('customers.edit'), wrap(c.updateCustomer));
+router.delete('/:id', requirePermission('customers.delete'), wrap(c.deleteCustomer));
 
 export default router;
