@@ -1,10 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { checkHealth, getAuthProfile, loginUser, registerUser } from '../lib/api';
+import { checkHealth, clearSession, getAuthProfile, hasSession, loginUser, logoutUser, registerUser, saveSession } from '../lib/api';
 import styles from './page.module.css';
-
-const TOKEN_KEY = 'cellivo_jwt';
 
 // Sidebar menu (SRS 4.1 / Figure 10.6)
 const NAV = [
@@ -14,10 +12,6 @@ const NAV = [
 // Phone bottom tab bar (SRS 10.1 responsive): label -> page
 const TABS = [['Home', 'Dashboard'], ['Sale', 'New Sale'], ['Stock', 'Inventory'], ['Repairs', 'Repairs']];
 
-const clearToken = () => {
-  localStorage.removeItem(TOKEN_KEY);
-  sessionStorage.removeItem(TOKEN_KEY);
-};
 const titleCase = (name = '') => name.replace(/\b\w/g, (c) => c.toUpperCase());
 const greeting = () => {
   const h = new Date().getHours();
@@ -31,10 +25,9 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
-    (token ? getAuthProfile(token) : Promise.resolve({ data: null }))
+    (hasSession() ? getAuthProfile() : Promise.resolve({ data: null }))
       .then(({ data }) => setUser(data))
-      .catch(clearToken)
+      .catch(clearSession)
       .finally(() => setLoading(false));
   }, []);
 
@@ -53,7 +46,7 @@ export default function Home() {
     <Dashboard
       user={user}
       onLogout={() => {
-        clearToken();
+        logoutUser().catch(() => {});
         setUser(null);
       }}
     />
@@ -74,7 +67,7 @@ function Login({ onLogin }) {
     setSubmitting(true);
     try {
       const res = isLogin ? await loginUser(form) : await registerUser(form);
-      (isLogin && !form.remember ? sessionStorage : localStorage).setItem(TOKEN_KEY, res.token);
+      saveSession(res, isLogin ? form.remember : true);
       onLogin(res.user);
     } catch (err) {
       setError(err.message);
@@ -146,10 +139,11 @@ function Login({ onLogin }) {
               type="password"
               value={form.password}
               onChange={set('password')}
-              minLength={6}
+              {...(!isLogin && { minLength: 8, pattern: '(?=.*[A-Za-z])(?=.*[0-9]).{8,}', title: 'At least 8 characters, with a letter and a number' })}
               autoComplete={isLogin ? 'current-password' : 'new-password'}
               required
             />
+            {!isLogin && <span className={styles.caption}>At least 8 characters, with a letter and a number.</span>}
           </label>
 
           {isLogin && (
@@ -230,7 +224,7 @@ function Dashboard({ user, onLogout }) {
           </div>
           <div className={styles.topActions}>
             <span className={styles.pill}>Main Branch</span>
-            <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role.replace('_', ' ')}`}>
+            <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}
             </span>
             <a className={styles.pill} href="https://support.cellivo.com" target="_blank" rel="noreferrer">Support</a>
