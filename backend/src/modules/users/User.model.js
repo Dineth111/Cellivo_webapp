@@ -1,91 +1,49 @@
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
+import tenantPlugin from '../../core/tenantPlugin.js';
 
 const userSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: [true, 'Full name is required'],
-      trim: true,
-      maxlength: [60, 'Name cannot exceed 60 characters'],
-    },
+    name: { type: String, required: [true, 'Full name is required'], trim: true, maxlength: [60, 'Name cannot exceed 60 characters'] },
+    // Globally unique: login looks the user up by email before the tenant is known (FRS F-01).
     email: {
       type: String,
       required: [true, 'Email address is required'],
       unique: true,
       lowercase: true,
       trim: true,
-      match: [
-        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
-        'Please provide a valid email address',
-      ],
+      match: [/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/, 'Please provide a valid email address'],
     },
-    password: {
-      type: String,
-      required: [true, 'Password is required'],
-      minlength: [6, 'Password must be at least 6 characters long'],
-      select: false, // Do not return password by default in queries
+    passwordHash: { type: String, required: true, select: false },
+    roleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Role', required: true, index: true },
+    branchIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }],
+      validate: [(v) => v.length > 0, 'At least one branch is required'],
     },
-    role: {
-      type: String,
-      // SRS SEC-04 default shop roles
-      enum: ['owner', 'branch_manager', 'cashier', 'technician', 'accountant'],
-      default: 'owner',
-    },
-    shopName: {
-      type: String,
-      trim: true,
-      default: '',
-    },
-    phone: {
-      type: String,
-      default: '',
-      trim: true,
-    },
-    avatar: {
-      type: String,
-      default: '',
-    },
-    lastLogin: {
-      type: Date,
-      default: null,
-    },
-    isActive: {
-      type: Boolean,
-      default: true,
-    },
-    // SRS SEC-10: lock for 15 minutes after 5 failed logins
-    failedLogins: {
-      type: Number,
-      default: 0,
-      select: false,
-    },
-    lockUntil: {
-      type: Date,
-      default: null,
-      select: false,
-    },
+    phone: { type: String, default: '', trim: true },
+    avatar: { type: String, default: '' },
+    discountLimit: { type: Number, min: 0, max: 100, default: null }, // null = use the role's limit
+    approvalPinHash: { type: String, select: false, default: null },
+    isActive: { type: Boolean, default: true },
+    lastLogin: { type: Date, default: null },
+    // SRS SEC-10 lockout
+    failedLogins: { type: Number, default: 0, select: false },
+    lockUntil: { type: Date, default: null, select: false },
+    // Single-use invite / password-reset token (only the hash is stored)
+    tokenHash: { type: String, select: false, default: null },
+    tokenPurpose: { type: String, enum: ['invite', 'reset', null], select: false, default: null },
+    tokenExpiresAt: { type: Date, select: false, default: null },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
+userSchema.plugin(tenantPlugin);
+userSchema.index({ tokenHash: 1 }, { sparse: true });
 
-// Hash password before saving to MongoDB
-userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) {
-    return next();
-  }
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
+// Never leak secrets even if a field was selected explicitly.
+userSchema.set('toJSON', {
+  transform: (doc, ret) => {
+    for (const k of ['passwordHash', 'approvalPinHash', 'tokenHash', 'tokenPurpose', 'tokenExpiresAt', 'failedLogins', 'lockUntil', '__v']) delete ret[k];
+    return ret;
+  },
 });
 
-// Compare password method
-userSchema.methods.matchPassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
-};
-
-const User = mongoose.models.User || mongoose.model('User', userSchema);
-
-export default User;
+export default mongoose.models.User || mongoose.model('User', userSchema);
