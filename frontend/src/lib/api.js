@@ -105,3 +105,32 @@ export const getAuthProfile = () => authFetch('/auth/me');
 
 export const updateAuthProfile = (profileData) =>
   authFetch('/auth/profile', { method: 'PUT', body: JSON.stringify(profileData) });
+
+// ---- sign-up (F-01) and billing (F-02, F-20) ----------------------------------------------------
+export const publicPlans = () => fetch(`${API_BASE}/public/plans`, { cache: 'no-store' }).then((r) => r.json()).then((d) => d.data || []);
+
+export const signupStart = (form) => post('/signup/start', form);
+export const signupResend = (email) => post('/signup/resend', { email });
+export const signupVerify = (email, code) => post('/signup/verify', { email, code });
+export const signupCheckCode = (code) => post('/signup/check-code', { code });
+
+export const getBillingSummary = () => authFetch('/billing/summary');
+export const getBillingPlans = () => authFetch('/billing/plans');
+export const getInvoices = () => authFetch('/billing/invoices');
+export const quotePlan = (body) => authFetch('/billing/quote', { method: 'POST', body: JSON.stringify(body) });
+export const subscribePlan = (body) => authFetch('/billing/subscribe', { method: 'POST', body: JSON.stringify(body) });
+export const cancelSubscription = () => authFetch('/billing/cancel', { method: 'POST' });
+export const undoCancel = () => authFetch('/billing/undo-cancel', { method: 'POST' });
+export const markNoticesRead = () => authFetch('/billing/notices/read', { method: 'POST' });
+
+/** Download an invoice PDF (needs the Bearer header, so a plain link will not work). */
+export async function downloadInvoice(inv) {
+  const send = (t) => fetch(`${API_BASE}/billing/invoices/${inv._id}/pdf`, { headers: { Authorization: `Bearer ${t}` } });
+  const store = findStore() || localStorage;
+  let res = await send(store.getItem(ACCESS_KEY));
+  if (res.status === 401) res = await send(await refreshAccessToken());
+  if (!res.ok) throw new Error('Could not download the invoice.');
+  const url = URL.createObjectURL(await res.blob());
+  Object.assign(document.createElement('a'), { href: url, download: `${inv.number}.pdf` }).click();
+  URL.revokeObjectURL(url);
+}

@@ -1,0 +1,17 @@
+.shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: calc(100vh - 67px); }
+.side { background: var(--surface); border-right: 1px solid var(--border); padding: 20px 14px; display: grid; gap: 18px; align-content: start; }
+.group { display: grid; gap: 2px; }
+.groupLabel { font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--muted); padding: 0 12px 6px; }
+.item, .active { border: 0; background: none; text-align: left; padding: 10px 12px; border-radius: 12px; font-size: 14px; font-weight: 500; color: var(--body); cursor: pointer; }
+.item:hover { background: #f9fafb; }
+.active { background: var(--tint); color: var(--brand); font-weight: 700; }
+.content { padding: 24px; display: grid; gap: 18px; align-content: start; min-width: 0; }
+
+@media (max-width: 800px) {
+  .shell { grid-template-columns: 1fr; }
+  .side { grid-auto-flow: column; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); padding: 10px; gap: 14px; }
+  .group { grid-auto-flow: column; align-items: center; gap: 4px; }
+  .groupLabel { display: none; }
+  .item, .active { white-space: nowrap; }
+  .content { padding: 16px; }
+}

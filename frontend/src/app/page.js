@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { checkHealth, clearSession, getAuthProfile, hasSession, loginUser, logoutUser, registerUser, saveSession } from '../lib/api';
 import styles from './page.module.css';
@@ -159,9 +160,7 @@ function Login({ onLogin }) {
 
           <p className={styles.switch}>
             {isLogin ? 'New to Cellivo? ' : 'Already have an account? '}
-            <button type="button" onClick={switchMode}>
-              {isLogin ? 'Start free trial' : 'Log in'}
-            </button>
+            {isLogin ? <Link href="/signup">Start free trial</Link> : <button type="button" onClick={switchMode}>Log in</button>}
           </p>
         </form>
       </section>
@@ -227,6 +226,7 @@ function Dashboard({ user, onLogout }) {
             <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}
             </span>
+            <Link className={styles.pill} href="/billing">Billing</Link>
             <a className={styles.pill} href="https://support.cellivo.com" target="_blank" rel="noreferrer">Support</a>
           </div>
         </header>
