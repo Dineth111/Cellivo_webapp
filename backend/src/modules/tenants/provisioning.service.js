@@ -14,22 +14,26 @@ import { config } from '../../core/config.js';
  * the 5 default roles and the owner user. Throws (and creates nothing) on any failure.
  * Sign-up flow around it (email verification, plan choice) belongs to Dev 2.
  */
-export async function provisionTenant({ ownerName, shopName, email, phone = '', password, country = 'LK' }) {
-  const pwError = passwordError(password);
-  if (pwError) throw badRequest(pwError);
+export async function provisionTenant({ ownerName, shopName, email, phone = '', password, passwordHash: preHashed, country = 'LK', tenantExtra = {} }) {
+  // sign-up (F-01) validates and hashes the password before the email is verified, so it passes the hash;
+  // tenantExtra carries plan, term, currency, trial end, affiliate code (billing module fields)
+  if (!preHashed) {
+    const pwError = passwordError(password);
+    if (pwError) throw badRequest(pwError);
+  }
 
   email = String(email).toLowerCase().trim();
   const exists = await runAsPlatform(async () => await User.exists({ email }));
   if (exists) throw conflict('An account with this email already exists. Log in or reset your password.');
 
-  const passwordHash = await hashPassword(password);
+  const passwordHash = preHashed ?? (await hashPassword(password));
   const trialEndsAt = new Date(Date.now() + config.trialDays * 864e5);
 
   const dbSession = await mongoose.startSession();
   try {
     let result;
     await dbSession.withTransaction(async () => {
-      const [tenant] = await Tenant.create([{ name: shopName, country, trialEndsAt }], { session: dbSession });
+      const [tenant] = await Tenant.create([{ name: shopName, country, trialEndsAt, ...tenantExtra }], { session: dbSession });
       result = await runWithContext({ tenantId: tenant._id }, async () => {
         const [branch] = await Branch.create([{ name: 'Main Branch', invoicePrefix: 'INV-' }], { session: dbSession });
         // clone: insertMany fills tenantId into the objects it is given

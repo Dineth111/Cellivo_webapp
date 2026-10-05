@@ -7,6 +7,7 @@ import { runWithContext } from '../../core/tenantContext.js';
 import { badRequest, notFound } from '../../core/errors.js';
 import { str, requireId } from '../../core/validate.js';
 import audit from '../../core/audit.js';
+import { config } from '../../core/config.js';
 
 const meta = (req) => ({ ip: req.ip, device: req.get('user-agent') || '' });
 
@@ -14,6 +15,9 @@ const meta = (req) => ({ ip: req.ip, device: req.get('user-agent') || '' });
 // TODO(Dev 2): the sign-up flow (email/phone verification, plan and billing term, coupon, setup wizard)
 // replaces this endpoint. Until then it provisions a tenant on the trial and logs the owner in.
 export const register = async (req, res) => {
+  // Dev 2's /api/signup (email verification, plan, coupon) is the real sign-up. This shortcut skips
+  // verification, so it only exists outside production (tests and local demos use it).
+  if (config.env === 'production') throw notFound('Route not found');
   const { name, shopName, email, password, phone, country } = req.body || {};
   if (![name, shopName, email, password].every((v) => typeof v === 'string' && v.trim())) {
     throw badRequest('Please provide full name, shop name, email, and password');

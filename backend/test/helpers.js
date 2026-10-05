@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
+import { resetPlanCache } from '../src/modules/plans/plans.service.js';
 
 let repl;
 
@@ -17,5 +18,6 @@ export async function stopDb() {
 // dropDatabase bypasses model hooks, so it also clears append-only collections.
 export async function resetDb() {
   await mongoose.connection.dropDatabase();
+  resetPlanCache(); // plans are seeded lazily and cached
   await Promise.all(Object.values(mongoose.models).map((m) => m.syncIndexes()));
 }

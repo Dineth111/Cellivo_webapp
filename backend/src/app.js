@@ -12,6 +12,10 @@ import rolesRoutes from './modules/roles/roles.routes.js';
 import branchesRoutes from './modules/branches/branches.routes.js';
 import auditRoutes from './modules/audit/audit.routes.js';
 import customerRoutes from './modules/customers/customers.routes.js';
+import billingRoutes from './modules/billing/billing.routes.js';
+import signupRoutes from './modules/signup/signup.routes.js';
+import publicRoutes from './modules/public/public.routes.js';
+import adminRoutes from './modules/admin/admin.routes.js';
 
 export function createApp() {
   const app = express();
@@ -30,6 +34,7 @@ export function createApp() {
       endpoints: {
         health: '/api/health', auth: '/api/auth', users: '/api/users', roles: '/api/roles',
         branches: '/api/branches', audit: '/api/audit', customers: '/api/customers',
+        billing: '/api/billing', signup: '/api/signup', public: '/api/public', admin: '/api/admin',
       },
     })
   );
@@ -45,6 +50,10 @@ export function createApp() {
   app.use('/api/branches', branchesRoutes);
   app.use('/api/audit', auditRoutes);
   app.use('/api/customers', customerRoutes);
+  app.use('/api/billing', billingRoutes);
+  app.use('/api/signup', signupRoutes);
+  app.use('/api/public', publicRoutes);
+  app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

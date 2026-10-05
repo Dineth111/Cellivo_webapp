@@ -3,10 +3,11 @@ import AuditLog from './AuditLog.model.js';
 import { protect } from '../../core/auth.js';
 import { requireOwner } from '../../core/permissions.js';
 import { wrap } from '../../core/errors.js';
+import { subscriptionGuard } from '../plans/planLimits.js';
 import { str, isId, pageParams } from '../../core/validate.js';
 
 const router = express.Router();
-router.use(protect, requireOwner);
+router.use(protect, subscriptionGuard, requireOwner);
 
 // GET /api/audit?user=&action=&from=&to=&page=&limit=
 router.get(

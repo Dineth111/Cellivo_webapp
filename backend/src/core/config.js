@@ -16,6 +16,13 @@ export const config = {
   trustProxy: env.TRUST_PROXY ? Number(env.TRUST_PROXY) : 0,
   authRateLimitMax: Number(env.AUTH_RATE_LIMIT_MAX) || 100,
   trialDays: Number(env.TRIAL_DAYS) || 14,
+  // billing (Dev 2). Retries run on days 1, 3 and 5; suspension after SUSPEND_AFTER_DAYS (FRS F-02, configurable)
+  paymentGateway: env.PAYMENT_GATEWAY || 'test',
+  suspendAfterDays: Number(env.SUSPEND_AFTER_DAYS) || 7,
+  subscriptionTaxPercent: Number(env.SUBSCRIPTION_TAX_PERCENT) || 0,
+  billingJobMinutes: env.BILLING_JOB_MINUTES === undefined ? 60 : Number(env.BILLING_JOB_MINUTES), // 0 = off
+  // platform admin (Dev 2). Empty list = any IP (development). Comma separated, exact IPs.
+  adminIpAllowList: (env.ADMIN_IP_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
   bcryptCost: env.NODE_ENV === 'test' ? 4 : 12,
   isDev: env.NODE_ENV === 'development',
 };

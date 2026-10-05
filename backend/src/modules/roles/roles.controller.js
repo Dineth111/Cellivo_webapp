@@ -4,6 +4,7 @@ import { MODULES, ACTIONS, SPECIALS } from '../../core/permissions.js';
 import { badRequest, conflict, notFound } from '../../core/errors.js';
 import { str, requireId } from '../../core/validate.js';
 import audit from '../../core/audit.js';
+import { hasFeature, planOf, featureError } from '../plans/planLimits.js';
 
 // Only known modules/actions with boolean values get through; everything else in the body is ignored.
 function cleanInput(b = {}) {
@@ -27,7 +28,6 @@ const load = async (id) => {
   return role;
 };
 
-// TODO(Dev 2): custom roles are a Starter+ feature; check the plan-limit service before create.
 export const list = async (req, res) => {
   const roles = await Role.find().sort({ isSystem: -1, name: 1 });
   res.json({ success: true, count: roles.length, data: roles });
@@ -36,6 +36,7 @@ export const list = async (req, res) => {
 export const get = async (req, res) => res.json({ success: true, data: await load(req.params.id) });
 
 export const create = async (req, res) => {
+  if (!hasFeature(await planOf(req.tenant), 'custom_roles')) throw await featureError('custom_roles'); // Starter+ (FRS F-04)
   const set = cleanInput(req.body);
   if (!set.name) throw badRequest('Role name is required');
   const role = new Role();

@@ -9,6 +9,7 @@ import { config } from '../../core/config.js';
 import audit from '../../core/audit.js';
 import { setPasswordLink, issueToken } from '../auth/auth.service.js';
 import { revokeUserSessions } from '../auth/session.service.js';
+import { assertCanAddUser, tenantFromContext } from '../plans/planLimits.js';
 
 const isOwnerCtx = () => getContext().role.key === 'owner';
 
@@ -60,6 +61,7 @@ export async function inviteUser(b = {}) {
   const name = str(b.name);
   if (!name || !email) throw badRequest('Name and email are required');
   const role = await checkRole(b.roleId);
+  await assertCanAddUser(await tenantFromContext(), role.key); // plan user/role limits (FRS F-04)
   const branchIds = await checkBranches(b.branchIds);
   const data = { name, email, phone: str(b.phone) || '', roleId: role._id, branchIds };
   if (b.discountLimit !== undefined) data.discountLimit = parseLimit(b.discountLimit);
