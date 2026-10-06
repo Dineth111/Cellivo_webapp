@@ -8,6 +8,7 @@ import { verifyApprovalPin } from '../adapters/approvalPin.adapter.js';
 import * as ledgerService from './ledger.service.js';
 import * as notificationsAdapter from '../adapters/notifications.adapter.js';
 import * as auditAdapter from '../adapters/audit.adapter.js';
+import * as loyaltyService from './loyalty.service.js';
 
 /**
  * Generate unique plan sequence: IP-YYYYMMDD-XXXX
@@ -293,6 +294,18 @@ export async function recordCustomerPayment({
       createdBy: receivedBy,
       session,
     });
+
+    // Accrue loyalty points for collected installment payment
+    if (actualDeducted > 0) {
+      await loyaltyService.accruePoints({
+        tenantId: tid,
+        branchId: bid,
+        customerId: customer._id,
+        paidAmountCents: actualDeducted,
+        type: 'installment_earn',
+        session,
+      });
+    }
 
     // Audit log
     await auditAdapter.record({

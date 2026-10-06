@@ -235,6 +235,7 @@ export async function postSplitPayment({
     bank: '1030',
     credit: '1040',
     store_credit: '2020',
+    loyalty_points: '2030',
   };
 
   const lines = [];

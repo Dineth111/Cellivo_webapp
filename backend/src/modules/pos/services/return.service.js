@@ -11,6 +11,7 @@ import * as stockAdapter from '../adapters/stock.adapter.js';
 import * as auditAdapter from '../adapters/audit.adapter.js';
 import { completeSale } from './sale.service.js';
 import * as financeService from './finance.service.js';
+import * as loyaltyService from './loyalty.service.js';
 
 /**
  * Format Credit Note sequence: CN-YYYYMMDD-XXXX
@@ -288,6 +289,18 @@ export async function processReturn({
             isRefund: true,
             session,
             userId,
+          });
+        }
+
+        // Reverse loyalty points originally earned on returned item value
+        if (invoice.customerId && subtotalRefundCents > 0) {
+          await loyaltyService.reversePoints({
+            tenantId: tid,
+            branchId: bid || invoice.branchId,
+            customerId: invoice.customerId,
+            invoiceId: invoice._id,
+            refundedAmountCents: subtotalRefundCents,
+            session,
           });
         }
 

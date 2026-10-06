@@ -19,6 +19,7 @@ import { verifyApprovalPin } from '../adapters/approvalPin.adapter.js';
 import { isValidImei } from '../utils/imei.js';
 import * as creditService from './credit.service.js';
 import * as financeService from './finance.service.js';
+import * as loyaltyService from './loyalty.service.js';
 
 export const posEvents = new EventEmitter();
 
@@ -151,6 +152,14 @@ export async function completeSale({
 
       // Auto-apply wholesale price if customer is wholesale and raw price wasn't manually overridden
       let unitPriceCents = money.round(raw.unitPriceCents ?? raw.priceCents ?? 0);
+      let resolvedName = raw.name;
+      if (unitPriceCents === 0 && (raw.barcode || raw.imei)) {
+        const stockItem = await stockAdapter.lookupByBarcode(tid, bid, raw.barcode);
+        if (stockItem) {
+          unitPriceCents = money.round(stockItem.sellingPriceCents || 0);
+          if (!resolvedName) resolvedName = stockItem.name;
+        }
+      }
       if (isWholesaleCustomer && raw.wholesalePriceCents && raw.wholesalePriceCents > 0) {
         unitPriceCents = money.round(raw.wholesalePriceCents);
       } else if (isWholesaleCustomer && (raw.barcode || raw.imei)) {
@@ -215,7 +224,7 @@ export async function completeSale({
 
       processedLines.push({
         productId: raw.productId || null,
-        name: raw.name || 'Product',
+        name: resolvedName || raw.name || 'Product',
         barcode: raw.barcode || '',
         imei: raw.imei ? String(raw.imei).trim() : null,
         qty,
@@ -413,6 +422,39 @@ export async function completeSale({
               await custToUpdate.save({ session });
             }
           }
+        }
+
+        // Process loyalty points redemption if tendered with loyalty_points
+        const loyaltyPayment = normalizedPayments.find((p) => p.method === 'loyalty_points');
+        if (loyaltyPayment && customerId) {
+          const settings = await loyaltyService.calculateEarnedPoints(tid, 0); // trigger settings load
+          const pointsToRedeem = Number(loyaltyPayment.reference || Math.round(loyaltyPayment.amountCents / 100));
+          await loyaltyService.redeemPoints({
+            tenantId: tid,
+            branchId: bid,
+            customerId,
+            invoiceId: createdInvoice._id,
+            pointsToRedeem,
+            amountCents: loyaltyPayment.amountCents,
+            session,
+          });
+        }
+
+        // Accrue loyalty points on actual PAID amount (excluding unpaid credit and loyalty points redemption)
+        const eligiblePaidCents = normalizedPayments
+          .filter((p) => p.method !== 'credit' && p.method !== 'loyalty_points')
+          .reduce((sum, p) => sum + p.amountCents, 0);
+
+        if (customerId && eligiblePaidCents > 0) {
+          await loyaltyService.accruePoints({
+            tenantId: tid,
+            branchId: bid,
+            customerId,
+            invoiceId: createdInvoice._id,
+            paidAmountCents: eligiblePaidCents,
+            type: 'earn',
+            session,
+          });
         }
 
         // Save Payment documents

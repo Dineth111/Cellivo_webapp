@@ -238,5 +238,24 @@ export async function getDayEndReport(date = null) {
   return res.data;
 }
 
+/**
+ * Retrieves customer loyalty point balance and transaction history.
+ */
+export async function getCustomerLoyalty(customerId) {
+  const res = await authFetch(`/pos/loyalty/customer/${encodeURIComponent(customerId)}`);
+  return res.data;
+}
+
+/**
+ * Calculates discount and remaining balance for requested loyalty points redemption.
+ */
+export async function calculateLoyaltyRedemption(points) {
+  const res = await authFetch('/pos/loyalty/calculate-redemption', {
+    method: 'POST',
+    body: JSON.stringify({ points }),
+  });
+  return res.data;
+}
+
 
 

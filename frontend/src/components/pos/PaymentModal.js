@@ -64,6 +64,45 @@ export default function PaymentModal({
 
   const handleAddPayment = () => {
     setError('');
+
+    if (selectedMethod === 'loyalty_points') {
+      if (!customer?._id) {
+        setError('Loyalty points can only be redeemed for registered customers.');
+        return;
+      }
+      const availablePoints = customer?.loyaltyPoints || 0;
+      if (availablePoints < 100) {
+        setError(`Minimum 100 points required to redeem. Customer has ${availablePoints} points.`);
+        return;
+      }
+      const requestedPts = Math.round(Number(tenderAmount));
+      if (isNaN(requestedPts) || requestedPts <= 0) {
+        setError('Please enter points to redeem (e.g. 100).');
+        return;
+      }
+      if (requestedPts < 100) {
+        setError(`Minimum 100 points required to redeem.`);
+        return;
+      }
+      if (requestedPts > availablePoints) {
+        setError(`Insufficient points: Customer only has ${availablePoints} points.`);
+        return;
+      }
+      const amtCents = requestedPts * 100; // 1 point = 100 cents (1 LKR)
+      setPayments((prev) => [
+        ...prev,
+        {
+          id: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          method: 'loyalty_points',
+          amountCents: amtCents,
+          reference: String(requestedPts),
+        },
+      ]);
+      setTenderAmount('');
+      setReference('');
+      return;
+    }
+
     let amt = Math.round(Number(tenderAmount) * 100);
     if (isNaN(amt) || amt <= 0) {
       if (remainingDueCents > 0) {
@@ -326,23 +365,52 @@ export default function PaymentModal({
             </div>
           )}
 
+          {/* Loyalty Points Info & Tender Inputs */}
+          {selectedMethod === 'loyalty_points' && (
+            <div style={{ background: 'var(--bg)', padding: 14, borderRadius: 8, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--heading)' }}>Loyalty Points Redemption (CRM-06)</span>
+                <Badge tone={(customer?.loyaltyPoints || 0) >= 100 ? 'success' : 'neutral'}>
+                  Balance: {customer?.loyaltyPoints || 0} pts
+                </Badge>
+              </div>
+              {(customer?.loyaltyPoints || 0) < 100 ? (
+                <div style={{ fontSize: '0.82rem', color: 'var(--danger)' }}>
+                  ⚠️ Minimum 100 points required to redeem. (1 point = Rs. 1.00)
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.82rem', color: 'var(--body)' }}>
+                  💡 Conversion: 1 Point = Rs. 1.00 (100 cents). Enter whole points to redeem.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Tender Inputs & Quick Tender */}
           {selectedMethod !== 'credit' && (
             <div className={styles.tenderSection}>
               <div className={styles.tenderInputs}>
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Tender Amount (LKR)</span>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>
+                    {selectedMethod === 'loyalty_points' ? 'Points to Redeem (e.g. 100)' : 'Tender Amount (LKR)'}
+                  </span>
                   <input
                     type="number"
-                    step="0.01"
-                    placeholder={remainingDueCents > 0 ? (remainingDueCents / 100).toFixed(2) : '0.00'}
+                    step={selectedMethod === 'loyalty_points' ? '1' : '0.01'}
+                    placeholder={
+                      selectedMethod === 'loyalty_points'
+                        ? Math.min(customer?.loyaltyPoints || 0, Math.ceil(remainingDueCents / 100)).toString()
+                        : remainingDueCents > 0
+                        ? (remainingDueCents / 100).toFixed(2)
+                        : '0.00'
+                    }
                     value={tenderAmount}
                     onChange={(e) => setTenderAmount(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddPayment()}
                   />
                 </label>
                 <Button type="button" variant="secondary" onClick={handleAddPayment}>
-                  + Add Tender
+                  {selectedMethod === 'loyalty_points' ? '+ Apply Points' : '+ Add Tender'}
                 </Button>
               </div>
 

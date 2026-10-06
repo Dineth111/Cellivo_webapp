@@ -12,6 +12,7 @@ const customerSchema = new mongoose.Schema(
     type: { type: String, enum: ['retail', 'wholesale'], default: 'retail' },
     creditLimitCents: { type: Number, default: 0, min: 0 },
     currentBalanceCents: { type: Number, default: 0, min: 0 },
+    loyaltyPoints: { type: Number, default: 0, min: 0 },
     notes: { type: String, default: '' },
     isArchived: { type: Boolean, default: false },
   },

@@ -539,9 +539,14 @@ export default function PosPage() {
                 </option>
               ))}
             </select>
-            {customer?.type === 'wholesale' && (
-              <div style={{ marginTop: 6 }}>
-                <Badge tone="brand">★ Wholesale Tier Applied</Badge>
+            {customer && (
+              <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Badge tone={(customer.loyaltyPoints || 0) >= 100 ? 'success' : 'neutral'}>
+                  ⭐ {customer.loyaltyPoints || 0} pts (Rs. {((customer.loyaltyPoints || 0)).toFixed(2)})
+                </Badge>
+                {customer.type === 'wholesale' && (
+                  <Badge tone="brand">★ Wholesale Tier Applied</Badge>
+                )}
               </div>
             )}
           </div>

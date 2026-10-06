@@ -22,6 +22,7 @@ import CashSession from '../src/modules/pos/models/CashSession.model.js';
 import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
+import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -49,6 +50,7 @@ const MODELS = {
   BankAccount,
   Cheque,
   Expense,
+  LoyaltyTransaction,
 };
 
 async function twoShops() {
