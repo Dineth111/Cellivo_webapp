@@ -1,0 +1,55 @@
+/* Cellivo design tokens (SRS 10.1) */
+:root {
+  --bg: #f5f7fb;
+  --surface: #ffffff;
+  --border: #e9edf5;
+  --input-border: #e4e8f0;
+  --brand: #3454d1;
+  --primary: #445ee4;
+  --primary-hover: #3a51cf;
+  --tint: #eef2ff;
+  --hero: linear-gradient(135deg, #142040 0%, #1c2954 45%, #39488d 100%);
+  --heading: #101828;
+  --body: #344054;
+  --secondary: #5e6b85;
+  --label: #667085;
+  --muted: #98a2b3;
+  --success: #12a150;
+  --success-bg: #e7f8ee;
+  --warning: #a15c00;
+  --warning-bg: #fff4db;
+  --danger: #c4282d;
+  --danger-bg: #fdecec;
+  --focus: 0 0 0 3px rgba(68, 94, 228, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-jakarta), Inter, 'Segoe UI', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+a {
+  color: var(--brand);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
