@@ -6,6 +6,8 @@ import InvoiceSequence from '../models/InvoiceSequence.model.js';
 import HeldCart from '../models/HeldCart.model.js';
 import Quotation from '../models/Quotation.model.js';
 import Customer from '../../customers/Customer.model.js';
+import Branch from '../../branches/Branch.model.js';
+import Tenant from '../../tenants/Tenant.model.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound, forbidden, AppError } from '../../../core/errors.js';
 import { hasSpecial } from '../../../core/permissions.js';
@@ -669,6 +671,53 @@ export async function convertQuotationToInvoice({
   });
 }
 
+/**
+ * Retrieves invoice with lines, payments, customer, branch and shop metadata for printing.
+ */
+export async function getInvoiceById({ tenantId, invoiceId, userRole }) {
+  const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
+  const allowCostMargin = hasSpecial(userRole, 'view_cost_margin');
+
+  return await runWithContext({ tenantId: tid }, async () => {
+    const invoice = await Invoice.findById(invoiceId)
+      .populate('salespersonId', 'name email')
+      .populate('customerId', 'name phone email address')
+      .lean();
+
+    if (!invoice) throw notFound('Invoice not found');
+
+    // Retrieve associated payments
+    const payments = await Payment.find({ invoiceId }).sort({ createdAt: 1 }).lean();
+
+    // Retrieve Branch details
+    let branch = null;
+    if (invoice.branchId) {
+      branch = await Branch.findById(invoice.branchId).lean();
+    }
+
+    // Retrieve Tenant details
+    const tenant = await Tenant.findById(tid)
+      .select('name country currency timezone billingDetails')
+      .lean();
+
+    const result = {
+      ...maskCostMargins(invoice, allowCostMargin),
+      payments,
+      branch: branch || {
+        name: 'Main Branch',
+        address: '',
+        phone: '',
+      },
+      tenant: tenant || {
+        name: 'Cellivo Shop',
+        currency: 'LKR',
+      },
+    };
+
+    return result;
+  });
+}
+
 export default {
   posEvents,
   maskCostMargins,
@@ -680,4 +729,5 @@ export default {
   cleanExpiredHeldCarts,
   createQuotation,
   convertQuotationToInvoice,
+  getInvoiceById,
 };

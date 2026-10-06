@@ -147,6 +147,27 @@ router.post(
 );
 
 /**
+ * GET /invoices/:id
+ * Retrieves a populated invoice for viewing, printing, and reprints.
+ */
+router.get(
+  '/invoices/:id',
+  requirePermission('pos.view'),
+  wrap(async (req, res) => {
+    const invoice = await saleService.getInvoiceById({
+      tenantId: req.auth.tenantId,
+      invoiceId: req.params.id,
+      userRole: req.auth.role,
+    });
+
+    res.json({
+      success: true,
+      data: invoice,
+    });
+  })
+);
+
+/**
  * POST /invoices/:id/void
  * Voids a completed invoice (guarded by void_invoice special permission).
  */

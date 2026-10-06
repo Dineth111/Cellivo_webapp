@@ -78,6 +78,13 @@ export async function getCustomers() {
   return res.data || [];
 }
 
+/** Fetches invoice details with lines, payments, and branch metadata by ID. */
+export async function getInvoiceById(id) {
+  const res = await authFetch(`/pos/sales/invoices/${id}`);
+  return res.data;
+}
+
 /** fetch() rejects with a TypeError when the request never reached the server. */
 export const isNetworkError = (err) =>
   err instanceof TypeError || (typeof navigator !== 'undefined' && !navigator.onLine);
+

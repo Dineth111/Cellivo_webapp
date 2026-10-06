@@ -121,7 +121,7 @@ export default function PaymentModal({
       });
 
       if (onSuccess) {
-        onSuccess(result);
+        onSuccess(result, { printReceipt, smsReceipt });
       }
     } catch (err) {
       setError(err.message || 'Checkout failed. Please check network and try again.');

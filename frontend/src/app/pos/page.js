@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   AppHeader,
   Button,
@@ -26,6 +27,7 @@ import styles from './pos.module.css';
 const CATEGORIES = ['All', 'Phones', 'Accessories', 'Parts', 'Services'];
 
 export default function PosPage() {
+  const router = useRouter();
   const {
     lines,
     customer,
@@ -254,9 +256,13 @@ export default function PosPage() {
     }
   };
 
-  const handleCheckoutSuccess = (result) => {
+  const handleCheckoutSuccess = (result, options = {}) => {
     if (result?.invoice) {
-      setSuccessInvoice(result.invoice);
+      if (options.printReceipt) {
+        router.push(`/pos/receipt/${result.invoice._id}?autoprint=true&fresh=true`);
+      } else {
+        setSuccessInvoice(result.invoice);
+      }
     } else if (result?.queued) {
       setBannerAlert({ tone: 'warning', text: OFFLINE_MESSAGE });
     }

@@ -1,0 +1,415 @@
+.receiptWrapper {
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+/* Base print container styles */
+.printableContainer {
+  background: #ffffff;
+  color: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  padding: 16px;
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+
+/* Template Formats */
+.thermal58 {
+  width: 58mm;
+  min-width: 58mm;
+  max-width: 58mm;
+  padding: 6px 4px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.thermal80 {
+  width: 80mm;
+  min-width: 80mm;
+  max-width: 80mm;
+  padding: 12px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.a4 {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 24mm 20mm;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.a5 {
+  width: 148mm;
+  min-height: 210mm;
+  padding: 16mm 14mm;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Reprint Watermark / Badge */
+.reprintBadge {
+  display: inline-block;
+  border: 2px dashed #dc2626;
+  color: #dc2626;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.reprintWatermarkA4 {
+  display: inline-block;
+  border: 3px dashed #dc2626;
+  color: #dc2626;
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: 0.15em;
+  padding: 4px 16px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+/* Header Styles */
+.shopHeader {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+  color: #111827;
+}
+
+.shopName {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.shopMeta {
+  font-size: 11px;
+  color: #4b5563;
+  margin-bottom: 2px;
+}
+
+.taxReg {
+  font-size: 10px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.divider {
+  border-top: 1px dashed #9ca3af;
+  margin: 8px 0;
+}
+
+.solidDivider {
+  border-top: 1px solid #111827;
+  margin: 10px 0;
+}
+
+.doubleDivider {
+  border-top: 2px solid #111827;
+  margin: 10px 0;
+}
+
+/* Metadata Rows */
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.metaRow strong {
+  font-weight: 600;
+}
+
+/* Line Items Table */
+.itemsTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.itemsTable th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 2px;
+  border-bottom: 1px dashed #6b7280;
+}
+
+.itemsTable td {
+  padding: 4px 2px;
+  vertical-align: top;
+}
+
+.itemName {
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.itemImei {
+  font-size: 10px;
+  color: #1f2937;
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.itemWarranty {
+  font-size: 9px;
+  color: #4b5563;
+  font-style: italic;
+}
+
+.itemSub {
+  font-size: 10px;
+  color: #4b5563;
+}
+
+.priceCol {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.qtyCol {
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Totals Section */
+.totalsSection {
+  margin-top: 6px;
+}
+
+.totalRow {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  font-size: 11px;
+}
+
+.grandTotalRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 800;
+  padding: 6px 0;
+  border-top: 1px dashed #111827;
+  border-bottom: 1px dashed #111827;
+  margin: 6px 0;
+}
+
+/* Payment Breakdown */
+.paymentSection {
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.paymentTitle {
+  font-weight: 700;
+  font-size: 11px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.paymentRow {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+/* Warranty & Footer Section */
+.warrantySection {
+  margin-top: 12px;
+  font-size: 10px;
+  color: #374151;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.warrantySection h4 {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.barcodeFooter {
+  text-align: center;
+  margin-top: 14px;
+}
+
+.barcodeVisual {
+  font-family: monospace;
+  letter-spacing: 0.2em;
+  font-size: 14px;
+  font-weight: 700;
+  border: 1px solid #d1d5db;
+  display: inline-block;
+  padding: 4px 10px;
+  background: #f9fafb;
+}
+
+.thankYou {
+  text-align: center;
+  font-weight: 700;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* A4 / A5 Formal Grid Layouts */
+.formalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.formalTitleBlock {
+  text-align: right;
+}
+
+.formalInvoiceTitle {
+  font-size: 24px;
+  font-weight: 900;
+  color: #1e3a8a;
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+
+.partyCards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+
+.partyCard {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.partyCard h4 {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.formalTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 20px;
+}
+
+.formalTable th {
+  background: #1e293b;
+  color: #ffffff;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.formalTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 12px;
+}
+
+.formalTotalsBlock {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 24px;
+}
+
+.formalTotalsTable {
+  width: 320px;
+  border-collapse: collapse;
+}
+
+.formalTotalsTable td {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.formalGrandTotal {
+  font-size: 15px;
+  font-weight: 800;
+  background: #f1f5f9;
+  border-top: 2px solid #0f172a;
+  border-bottom: 2px solid #0f172a;
+}
+
+/* =====================================================================
+   PRINT MEDIA RULES (POS-11, INT-04)
+   ===================================================================== */
+@media print {
+  @page {
+    margin: 0;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .receiptWrapper {
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .printableContainer {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 auto !important;
+  }
+
+  /* Exact physical dimensions with zero clipping margins */
+  .thermal58 {
+    width: 58mm !important;
+    max-width: 58mm !important;
+    min-width: 58mm !important;
+    padding: 2mm !important;
+    page-break-after: avoid;
+  }
+
+  .thermal80 {
+    width: 80mm !important;
+    max-width: 80mm !important;
+    min-width: 80mm !important;
+    padding: 4mm !important;
+    page-break-after: avoid;
+  }
+
+  .a4 {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 10mm 15mm !important;
+  }
+
+  .a5 {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 8mm 10mm !important;
+  }
+}
