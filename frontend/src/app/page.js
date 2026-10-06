@@ -226,6 +226,7 @@ function Dashboard({ user, onLogout }) {
             <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}
             </span>
+            <Link className={styles.pill} href="/pos">POS Register</Link>
             <Link className={styles.pill} href="/billing">Billing</Link>
             <a className={styles.pill} href="https://support.cellivo.com" target="_blank" rel="noreferrer">Support</a>
           </div>
