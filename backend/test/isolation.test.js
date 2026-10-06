@@ -17,6 +17,7 @@ import Payment from '../src/modules/pos/models/Payment.model.js';
 import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import Quotation from '../src/modules/pos/models/Quotation.model.js';
 import CreditNote from '../src/modules/pos/models/CreditNote.model.js';
+import InstallmentPlan from '../src/modules/pos/models/InstallmentPlan.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -39,6 +40,7 @@ const MODELS = {
   HeldCart,
   Quotation,
   CreditNote,
+  InstallmentPlan,
 };
 
 async function twoShops() {

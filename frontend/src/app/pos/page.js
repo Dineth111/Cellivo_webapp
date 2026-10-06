@@ -13,6 +13,7 @@ import {
 } from '../../components/ui';
 import PaymentModal from '../../components/pos/PaymentModal';
 import ReturnModal from '../../components/pos/ReturnModal';
+import CreditManagementModal from '../../components/pos/CreditManagementModal';
 import useCart, { OFFLINE_MESSAGE } from '../../hooks/useCart';
 import {
   searchProducts,
@@ -63,6 +64,7 @@ export default function PosPage() {
   const [heldCarts, setHeldCarts] = useState([]);
   const [isHeldOpen, setIsHeldOpen] = useState(false);
   const [isReturnOpen, setIsReturnOpen] = useState(false);
+  const [isCreditMgmtOpen, setIsCreditMgmtOpen] = useState(false);
   const [tradeInImei, setTradeInImei] = useState('');
   const [tradeInModel, setTradeInModel] = useState('');
   const [tradeInValuation, setTradeInValuation] = useState('');
@@ -89,6 +91,9 @@ export default function PosPage() {
       if (e.key === 'F4') {
         e.preventDefault();
         setIsReturnOpen(true);
+      } else if (e.key === 'F6') {
+        e.preventDefault();
+        setIsCreditMgmtOpen(true);
       } else if (e.key === 'F9') {
         e.preventDefault();
         setIsPaymentOpen(true);
@@ -301,6 +306,9 @@ export default function PosPage() {
         )}
         <Button variant="secondary" onClick={() => setIsReturnOpen(true)} className={styles.cartHeaderBtn}>
           Returns (F4)
+        </Button>
+        <Button variant="secondary" onClick={() => setIsCreditMgmtOpen(true)} className={styles.cartHeaderBtn}>
+          Credit / Dues (F6)
         </Button>
         <Button variant="secondary" onClick={handleOpenHeld} className={styles.cartHeaderBtn}>
           Held Carts
@@ -762,6 +770,13 @@ export default function PosPage() {
             });
           }
         }}
+      />
+
+      {/* Credit & Installment Management Modal (F6) */}
+      <CreditManagementModal
+        isOpen={isCreditMgmtOpen}
+        onClose={() => setIsCreditMgmtOpen(false)}
+        customers={customers}
       />
     </div>
   );

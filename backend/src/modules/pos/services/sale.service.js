@@ -17,6 +17,7 @@ import * as stockAdapter from '../adapters/stock.adapter.js';
 import * as auditAdapter from '../adapters/audit.adapter.js';
 import { verifyApprovalPin } from '../adapters/approvalPin.adapter.js';
 import { isValidImei } from '../utils/imei.js';
+import * as creditService from './credit.service.js';
 
 export const posEvents = new EventEmitter();
 
@@ -90,6 +91,7 @@ export async function completeSale({
       invoiceDiscountAmountCents = 0,
       tradeInValueCents = 0,
       tradeIn = null,
+      installmentPlan = null,
       taxRatePercent = 0,
       notes = '',
       managerPin = null,
@@ -111,7 +113,7 @@ export async function completeSale({
       isWholesaleCustomer = cust.type === 'wholesale';
     }
 
-    const isCreditSale = payments.some((p) => p.method === 'credit');
+    const isCreditSale = payments.some((p) => p.method === 'credit') || !!installmentPlan;
     if (isCreditSale && !customerId) {
       throw badRequest('Walk-in customers cannot purchase on credit. Please select a customer.', 'CREDIT_REQUIRES_CUSTOMER');
     }
@@ -268,6 +270,32 @@ export async function completeSale({
       taxRatePercent,
     });
 
+    // Credit Limit & Exposure Validation (V-07)
+    if (isCreditSale && customerId) {
+      const custDoc = await Customer.findById(customerId);
+      const financedOrCreditCents = installmentPlan
+        ? totals.grandTotalCents - Math.round(Number(installmentPlan.downPaymentCents || 0))
+        : payments.filter((p) => p.method === 'credit').reduce((s, p) => s + p.amountCents, 0) || Math.max(0, totals.grandTotalCents - (payments.reduce((s, p) => s + p.amountCents, 0)));
+
+      if (financedOrCreditCents > 0 && custDoc) {
+        const currentBal = custDoc.currentBalanceCents || 0;
+        const limit = custDoc.creditLimitCents || 0;
+        const exposure = currentBal + financedOrCreditCents;
+
+        if (exposure > limit) {
+          const excess = exposure - limit;
+          const pinVerify = await verifyApprovalPin(tid, managerPin);
+          if (!pinVerify.approved) {
+            throw new AppError(
+              400,
+              `${custDoc.name} would go over their credit limit by ${excess}. Take a payment or ask a manager to approve.`,
+              'V-07'
+            );
+          }
+        }
+      }
+    }
+
     // 5. Payments validation
     let totalPaidCents = 0;
     const normalizedPayments = [];
@@ -290,9 +318,13 @@ export async function completeSale({
     }
 
     const changeDueCents = Math.max(0, money.subtract(totalPaidCents, totals.grandTotalCents));
+    const cashOrCollectedPaidCents = normalizedPayments
+      .filter((p) => p.method !== 'credit')
+      .reduce((sum, p) => sum + p.amountCents, 0);
+
     let paymentStatus = 'paid';
     if (isCreditSale) {
-      paymentStatus = totalPaidCents === 0 ? 'unpaid' : totalPaidCents >= totals.grandTotalCents ? 'paid' : 'partially_paid';
+      paymentStatus = cashOrCollectedPaidCents === 0 ? 'unpaid' : cashOrCollectedPaidCents >= totals.grandTotalCents ? 'paid' : 'partially_paid';
     }
 
     // 6. Execute atomic transaction (with retry for write conflicts under high parallel concurrency)
@@ -342,13 +374,45 @@ export async function completeSale({
           taxCents: totals.taxCents,
           tradeInCents: totals.tradeInValueCents,
           grandTotalCents: totals.grandTotalCents,
-          totalPaidCents,
+          totalPaidCents: isCreditSale ? cashOrCollectedPaidCents : totalPaidCents,
           changeDueCents,
           lines: processedLines,
           notes,
         });
 
         await createdInvoice.save({ session });
+
+        // If installment plan requested, create plan document inside transaction
+        let createdPlan = null;
+        if (installmentPlan) {
+          createdPlan = await creditService.createInstallmentPlan({
+            tenantId: tid,
+            branchId: bid,
+            invoiceId: createdInvoice._id,
+            invoiceNumber,
+            customerId,
+            customerSnapshot,
+            totalAmountCents: totals.grandTotalCents,
+            downPaymentCents: installmentPlan.downPaymentCents || 0,
+            numberOfInstallments: installmentPlan.numberOfInstallments || 3,
+            frequency: installmentPlan.frequency || 'monthly',
+            firstDueDate: installmentPlan.firstDueDate || null,
+            userId,
+            session,
+          });
+
+          createdInvoice.installmentPlanId = createdPlan._id;
+          await createdInvoice.save({ session });
+        } else if (isCreditSale && customerId) {
+          const creditAmt = payments.filter((p) => p.method === 'credit').reduce((s, p) => s + p.amountCents, 0) || Math.max(0, totals.grandTotalCents - totalPaidCents);
+          if (creditAmt > 0) {
+            const custToUpdate = await Customer.findById(customerId).session(session);
+            if (custToUpdate) {
+              custToUpdate.currentBalanceCents = (custToUpdate.currentBalanceCents || 0) + creditAmt;
+              await custToUpdate.save({ session });
+            }
+          }
+        }
 
         // Save Payment documents
         savedPayments = [];

@@ -118,3 +118,62 @@ export async function processExchange(exchangeData) {
 export const isNetworkError = (err) =>
   err instanceof TypeError || (typeof navigator !== 'undefined' && !navigator.onLine);
 
+/**
+ * Checks customer credit limit and exposure eligibility.
+ */
+export async function checkCreditEligibility(customerId, requestedAmountCents = 0, pin = null) {
+  let url = `/pos/credit/customers/${encodeURIComponent(customerId)}/eligibility?requestedAmountCents=${requestedAmountCents}`;
+  if (pin) url += `&pin=${encodeURIComponent(pin)}`;
+  const res = await authFetch(url);
+  return res.data;
+}
+
+/**
+ * Retrieves customer aging summary and overdue installments.
+ */
+export async function getCustomerAging(customerId) {
+  const res = await authFetch(`/pos/credit/customers/${encodeURIComponent(customerId)}/aging`);
+  return res.data;
+}
+
+/**
+ * Records a customer collection payment applied oldest-due first.
+ */
+export async function recordCreditPayment(paymentData) {
+  const res = await authFetch('/pos/credit/payments', {
+    method: 'POST',
+    body: JSON.stringify(paymentData),
+  });
+  return res.data;
+}
+
+/**
+ * Retrieves all overdue installments across the branch.
+ */
+export async function getOverdueInstallments() {
+  const res = await authFetch('/pos/credit/overdue');
+  return res.data || [];
+}
+
+/**
+ * Dispatches an automated installment SMS reminder.
+ */
+export async function sendInstallmentReminder(planId, installmentNo) {
+  const res = await authFetch(`/pos/credit/remind/${encodeURIComponent(planId)}/${encodeURIComponent(installmentNo)}`, {
+    method: 'POST',
+  });
+  return res.data;
+}
+
+/**
+ * Previews installment schedule without saving.
+ */
+export async function calculateInstallmentSchedule(scheduleParams) {
+  const res = await authFetch('/pos/credit/calculate-schedule', {
+    method: 'POST',
+    body: JSON.stringify(scheduleParams),
+  });
+  return res.data;
+}
+
+

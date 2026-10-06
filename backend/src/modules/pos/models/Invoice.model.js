@@ -63,6 +63,7 @@ const invoiceSchema = new mongoose.Schema(
       type: [invoiceLineSchema],
       validate: [(v) => Array.isArray(v) && v.length > 0, 'An invoice must have at least one line'],
     },
+    installmentPlanId: { type: mongoose.Schema.Types.ObjectId, ref: 'InstallmentPlan', default: null, index: true },
     notes: { type: String, default: '', trim: true },
     voidReason: { type: String, default: null },
     voidedAt: { type: Date, default: null },

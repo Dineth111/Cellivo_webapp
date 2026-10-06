@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { Button, Alert, money } from '../ui';
+import { Button, Alert, money, Badge } from '../ui';
 import styles from './PaymentModal.module.css';
 
 const PAYMENT_METHODS = [
@@ -9,7 +9,7 @@ const PAYMENT_METHODS = [
   { id: 'card', label: 'Card', icon: '💳' },
   { id: 'bank_transfer', label: 'Bank Transfer', icon: '🏦' },
   { id: 'cheque', label: 'Cheque', icon: '📝' },
-  { id: 'credit', label: 'Store Credit', icon: '📋' },
+  { id: 'credit', label: 'Credit / Installment', icon: '📋' },
   { id: 'loyalty_points', label: 'Points', icon: '⭐' },
 ];
 
@@ -31,6 +31,19 @@ export default function PaymentModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
+  // Installment plan & credit management state
+  const [isInstallment, setIsInstallment] = useState(false);
+  const [downPayment, setDownPayment] = useState('0');
+  const [installmentCount, setInstallmentCount] = useState(3);
+  const [frequency, setFrequency] = useState('monthly');
+  const [firstDueDate, setFirstDueDate] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [managerPin, setManagerPin] = useState('');
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
+
   const grandTotalCents = totals?.grandTotalCents || 0;
 
   // Total paid across split payments
@@ -44,7 +57,10 @@ export default function PaymentModal({
   // Change due (only applies if total paid exceeds total, e.g. for cash)
   const changeDueCents = Math.max(0, totalPaidCents - grandTotalCents);
 
-  if (!isOpen) return null;
+  // Financed amount calculation for installment preview
+  const downPaymentCents = Math.round(Number(downPayment) * 100) || 0;
+  const financedCents = Math.max(0, grandTotalCents - downPaymentCents);
+  const perInstallmentEstCents = installmentCount > 0 ? Math.floor(financedCents / installmentCount) : 0;
 
   const handleAddPayment = () => {
     setError('');
@@ -83,39 +99,61 @@ export default function PaymentModal({
     setError('');
     const effectivePayments = [...payments];
 
-    // If no payments explicitly added to the list, auto-tender remaining due using selected method
+    // If no payments explicitly added to the list:
     if (effectivePayments.length === 0) {
-      const enterAmt = Math.round(Number(tenderAmount) * 100);
-      const amtToPay = enterAmt > 0 ? enterAmt : remainingDueCents;
-      if (amtToPay > 0 || grandTotalCents === 0) {
-        effectivePayments.push({
-          method: selectedMethod,
-          amountCents: amtToPay,
-          reference: reference.trim() || undefined,
-        });
+      if (selectedMethod === 'credit' && isInstallment) {
+        // Down payment is recorded if > 0
+        if (downPaymentCents > 0) {
+          effectivePayments.push({
+            method: 'cash',
+            amountCents: downPaymentCents,
+            reference: 'Installment Down Payment',
+          });
+        }
+      } else {
+        const enterAmt = Math.round(Number(tenderAmount) * 100);
+        const amtToPay = enterAmt > 0 ? enterAmt : remainingDueCents;
+        if (amtToPay > 0 || grandTotalCents === 0) {
+          effectivePayments.push({
+            method: selectedMethod,
+            amountCents: amtToPay,
+            reference: reference.trim() || undefined,
+          });
+        }
       }
     }
 
     const totalTendered = effectivePayments.reduce((s, p) => s + p.amountCents, 0);
-    if (totalTendered < grandTotalCents) {
+    if (!isInstallment && !effectivePayments.some((p) => p.method === 'credit') && totalTendered < grandTotalCents) {
       setError(`Insufficient payment: ${money(totalTendered)} tendered vs ${money(grandTotalCents)} due.`);
       return;
     }
 
-    // Enforce credit sales require a customer
-    if (effectivePayments.some((p) => p.method === 'credit') && !customer?._id) {
-      setError('Walk-in customers cannot purchase on credit. Please select a registered customer.');
+    // Enforce credit sales & installments require a customer
+    if ((isInstallment || effectivePayments.some((p) => p.method === 'credit')) && !customer?._id) {
+      setError('Walk-in customers cannot purchase on credit or installments. Please select a registered customer.');
       return;
     }
 
     setSubmitting(true);
     try {
+      const installmentPlanData = isInstallment
+        ? {
+            downPaymentCents,
+            numberOfInstallments: Number(installmentCount) || 3,
+            frequency,
+            firstDueDate,
+          }
+        : undefined;
+
       const result = await onSubmitCheckout({
         payments: effectivePayments.map((p) => ({
           method: p.method,
           amountCents: p.amountCents,
           reference: p.reference,
         })),
+        installmentPlan: installmentPlanData,
+        managerPin: managerPin.trim() || undefined,
         printReceipt,
         smsReceipt,
       });
@@ -124,11 +162,17 @@ export default function PaymentModal({
         onSuccess(result, { printReceipt, smsReceipt });
       }
     } catch (err) {
-      setError(err.message || 'Checkout failed. Please check network and try again.');
+      const errMsg = err.message || 'Checkout failed. Please check network and try again.';
+      setError(errMsg);
+      if (errMsg.includes('credit limit') || errMsg.includes('V-07')) {
+        setShowPinPrompt(true);
+      }
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
@@ -181,8 +225,13 @@ export default function PaymentModal({
                 <button
                   key={m.id}
                   type="button"
-                  className={`${styles.methodTile} ${selectedMethod === m.id ? styles.methodActive : ''}`}
-                  onClick={() => setSelectedMethod(m.id)}
+                  className={styles.methodTile + (selectedMethod === m.id ? ' ' + styles.methodActive : '')}
+                  onClick={() => {
+                    setSelectedMethod(m.id);
+                    if (m.id === 'credit') {
+                      setIsInstallment(true);
+                    }
+                  }}
                 >
                   <span style={{ fontSize: '1.25rem' }}>{m.icon}</span>
                   <span>{m.label}</span>
@@ -191,70 +240,158 @@ export default function PaymentModal({
             </div>
           </div>
 
-          {/* Tender Inputs & Quick Tender */}
-          <div className={styles.tenderSection}>
-            <div className={styles.tenderInputs}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Tender Amount (LKR)</span>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder={remainingDueCents > 0 ? (remainingDueCents / 100).toFixed(2) : '0.00'}
-                  value={tenderAmount}
-                  onChange={(e) => setTenderAmount(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAddPayment()}
-                />
-              </label>
-              <Button type="button" variant="secondary" onClick={handleAddPayment}>
-                + Add Tender
-              </Button>
-            </div>
-
-            {selectedMethod === 'cash' && (
-              <div className={styles.quickRow}>
-                <button
-                  type="button"
-                  className={styles.quickBtn}
-                  onClick={() => handleQuickCash(remainingDueCents)}
-                >
-                  Exact ({money(remainingDueCents)})
-                </button>
-                <button
-                  type="button"
-                  className={styles.quickBtn}
-                  onClick={() => handleQuickCash(remainingDueCents + 50000)}
-                >
-                  + Rs 500
-                </button>
-                <button
-                  type="button"
-                  className={styles.quickBtn}
-                  onClick={() => handleQuickCash(remainingDueCents + 100000)}
-                >
-                  + Rs 1,000
-                </button>
-                <button
-                  type="button"
-                  className={styles.quickBtn}
-                  onClick={() => handleQuickCash(remainingDueCents + 500000)}
-                >
-                  + Rs 5,000
-                </button>
+          {/* Credit & Installment Configuration */}
+          {selectedMethod === 'credit' && (
+            <div style={{ background: 'var(--bg)', padding: 14, borderRadius: 8, border: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--heading)' }}>
+                  Installment Purchase (F-11)
+                </span>
+                {customer?.creditLimitCents != null && (
+                  <Badge tone="brand">
+                    Limit: {money(customer.creditLimitCents)} (Bal: {money(customer.currentBalanceCents || 0)})
+                  </Badge>
+                )}
               </div>
-            )}
 
-            {(selectedMethod === 'card' || selectedMethod === 'bank_transfer' || selectedMethod === 'cheque') && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label)', fontWeight: 600 }}>Down Payment (LKR)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={downPayment}
+                    onChange={(e) => setDownPayment(e.target.value)}
+                    style={{ minHeight: 44, padding: '0 8px', border: '1px solid var(--border)', borderRadius: 6 }}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label)', fontWeight: 600 }}>Installments (1-36)</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="36"
+                    value={installmentCount}
+                    onChange={(e) => setInstallmentCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    style={{ minHeight: 44, padding: '0 8px', border: '1px solid var(--border)', borderRadius: 6 }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label)', fontWeight: 600 }}>Frequency</span>
+                  <select
+                    value={frequency}
+                    onChange={(e) => setFrequency(e.target.value)}
+                    style={{ minHeight: 44, padding: '0 8px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)' }}
+                  >
+                    <option value="monthly">Monthly</option>
+                    <option value="weekly">Weekly</option>
+                  </select>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--label)', fontWeight: 600 }}>First Due Date</span>
+                  <input
+                    type="date"
+                    value={firstDueDate}
+                    onChange={(e) => setFirstDueDate(e.target.value)}
+                    style={{ minHeight: 44, padding: '0 8px', border: '1px solid var(--border)', borderRadius: 6 }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ fontSize: '0.85rem', color: 'var(--body)', padding: '6px 10px', background: 'var(--surface)', borderRadius: 6 }}>
+                Financed: <strong>{money(financedCents)}</strong> ({installmentCount}x ~{money(perInstallmentEstCents)} {frequency})
+              </div>
+            </div>
+          )}
+
+          {/* Manager Approval PIN (V-07 / Over Limit) */}
+          {(showPinPrompt || selectedMethod === 'credit') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Reference / Tx ID / Cheque #</span>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>
+                  Manager Approval PIN (Required if exceeding credit limit)
+                </span>
                 <input
-                  type="text"
-                  placeholder="Approval code or reference number"
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
+                  type="password"
+                  placeholder="Enter manager PIN to override limit"
+                  value={managerPin}
+                  onChange={(e) => setManagerPin(e.target.value)}
+                  style={{ minHeight: 44, padding: '0 12px', border: '1px solid var(--border)', borderRadius: 6, maxWidth: 300 }}
                 />
               </label>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Tender Inputs & Quick Tender */}
+          {selectedMethod !== 'credit' && (
+            <div className={styles.tenderSection}>
+              <div className={styles.tenderInputs}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Tender Amount (LKR)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={remainingDueCents > 0 ? (remainingDueCents / 100).toFixed(2) : '0.00'}
+                    value={tenderAmount}
+                    onChange={(e) => setTenderAmount(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddPayment()}
+                  />
+                </label>
+                <Button type="button" variant="secondary" onClick={handleAddPayment}>
+                  + Add Tender
+                </Button>
+              </div>
+
+              {selectedMethod === 'cash' && (
+                <div className={styles.quickRow}>
+                  <button
+                    type="button"
+                    className={styles.quickBtn}
+                    onClick={() => handleQuickCash(remainingDueCents)}
+                  >
+                    Exact ({money(remainingDueCents)})
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.quickBtn}
+                    onClick={() => handleQuickCash(remainingDueCents + 50000)}
+                  >
+                    + Rs 500
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.quickBtn}
+                    onClick={() => handleQuickCash(remainingDueCents + 100000)}
+                  >
+                    + Rs 1,000
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.quickBtn}
+                    onClick={() => handleQuickCash(remainingDueCents + 500000)}
+                  >
+                    + Rs 5,000
+                  </button>
+                </div>
+              )}
+
+              {(selectedMethod === 'card' || selectedMethod === 'bank_transfer' || selectedMethod === 'cheque') && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Reference / Tx ID / Cheque #</span>
+                  <input
+                    type="text"
+                    placeholder="Approval code or reference number"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
+          )}
 
           {/* Tendered Payments List */}
           {payments.length > 0 && (

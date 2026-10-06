@@ -250,7 +250,7 @@ export function useCart() {
 
   /** Request body for POST /pos/sales/checkout. Cost prices are left to the server. */
   const buildCheckoutPayload = useCallback(
-    ({ payments, printReceipt, smsReceipt }) => ({
+    ({ payments, printReceipt, smsReceipt, installmentPlan, managerPin }) => ({
       customerId: cart.customer?._id || undefined,
       lines: cart.lines.map((l) => ({
         productId: l.productId,
@@ -266,6 +266,8 @@ export function useCart() {
       invoiceDiscountAmountCents: cart.invoiceDiscountAmountCents,
       tradeInValueCents: totals.tradeInValueCents,
       tradeIn: cart.tradeIn || undefined,
+      installmentPlan: installmentPlan || undefined,
+      managerPin: managerPin || undefined,
       payments,
       notes: cart.notes || undefined,
       printReceipt,
