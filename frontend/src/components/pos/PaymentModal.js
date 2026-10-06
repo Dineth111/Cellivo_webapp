@@ -2,7 +2,6 @@
 
 import { useState, useMemo } from 'react';
 import { Button, Alert, money } from '../ui';
-import { checkoutSale } from '../../lib/posApi';
 import styles from './PaymentModal.module.css';
 
 const PAYMENT_METHODS = [
@@ -18,13 +17,8 @@ export default function PaymentModal({
   isOpen,
   onClose,
   totals,
-  lines,
   customer,
-  invoiceDiscountPercent = 0,
-  invoiceDiscountAmountCents = 0,
-  tradeIn = null,
-  notes = '',
-  idempotencyKey,
+  onSubmitCheckout,
   onSuccess,
   isOnline = true,
 }) {
@@ -59,7 +53,7 @@ export default function PaymentModal({
       if (remainingDueCents > 0) {
         amt = remainingDueCents;
       } else {
-        setError('Please enter a valid amount.');
+        setError('Please enter a valid tender amount.');
         return;
       }
     }
@@ -89,7 +83,7 @@ export default function PaymentModal({
     setError('');
     const effectivePayments = [...payments];
 
-    // If no payments explicitly added, auto-tender remaining due using selected method
+    // If no payments explicitly added to the list, auto-tender remaining due using selected method
     if (effectivePayments.length === 0) {
       const enterAmt = Math.round(Number(tenderAmount) * 100);
       const amtToPay = enterAmt > 0 ? enterAmt : remainingDueCents;
@@ -108,47 +102,24 @@ export default function PaymentModal({
       return;
     }
 
-    if (!isOnline) {
-      // Save offline and notify user
-      setError("You're offline. Your cart is saved and will be sent when the connection returns.");
+    // Enforce credit sales require a customer
+    if (effectivePayments.some((p) => p.method === 'credit') && !customer?._id) {
+      setError('Walk-in customers cannot purchase on credit. Please select a registered customer.');
       return;
     }
 
     setSubmitting(true);
     try {
-      const salePayload = {
-        customerId: customer?._id || undefined,
-        customerName: customer?.name || 'Walk-in Customer',
-        customerPhone: customer?.phone || undefined,
-        lines: lines.map((l) => ({
-          productId: l.productId,
-          name: l.name,
-          barcode: l.barcode,
-          imei: l.imei || undefined,
-          qty: l.qty,
-          unitPriceCents: l.unitPriceCents,
-          costPriceCents: l.costPriceCents || 0,
-          discountPercent: l.discountPercent || 0,
-          discountAmountCents: l.discountAmountCents || 0,
-        })),
-        invoiceDiscountPercent,
-        invoiceDiscountAmountCents,
-        tradeIn: tradeIn ? {
-          imei: tradeIn.imei,
-          modelName: tradeIn.modelName,
-          valuationCents: tradeIn.valuationCents,
-        } : undefined,
+      const result = await onSubmitCheckout({
         payments: effectivePayments.map((p) => ({
           method: p.method,
           amountCents: p.amountCents,
           reference: p.reference,
         })),
-        notes: notes || undefined,
         printReceipt,
         smsReceipt,
-      };
+      });
 
-      const result = await checkoutSale(salePayload, idempotencyKey);
       if (onSuccess) {
         onSuccess(result);
       }
@@ -160,10 +131,10 @@ export default function PaymentModal({
   };
 
   return (
-    <div className={styles.overlay} role="dialog" aria-modal="true">
+    <div className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="payment-modal-title">
       <div className={styles.modal}>
         <div className={styles.header}>
-          <h2>Complete Sale (F9)</h2>
+          <h2 id="payment-modal-title">Complete Sale (F9)</h2>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close dialog">
             ✕
           </button>
@@ -277,7 +248,7 @@ export default function PaymentModal({
                 <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--heading)' }}>Reference / Tx ID / Cheque #</span>
                 <input
                   type="text"
-                  placeholder="Approval code or reference"
+                  placeholder="Approval code or reference number"
                   value={reference}
                   onChange={(e) => setReference(e.target.value)}
                 />

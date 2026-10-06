@@ -1,49 +1,59 @@
 import { authFetch } from './api.js';
 
 /**
- * Looks up inventory items by barcode, IMEI, or text query.
+ * Stock records come back from the backend with `qty` and an `imeiList`.
+ * The POS screens work with one flat shape, so normalise here.
  */
-export async function lookupItems({ barcode, imei, q }) {
-  const params = new URLSearchParams();
-  if (barcode) params.set('barcode', barcode);
-  if (imei) params.set('imei', imei);
-  if (q) params.set('q', q);
+export function normalizeProduct(p) {
+  if (!p) return null;
+  const imeiList = Array.isArray(p.imeiList) ? p.imeiList : [];
+  const requiresImei = imeiList.length > 0;
+  const availableImeis = imeiList.filter((i) => i.status === 'in_stock').map((i) => i.imei);
+  return {
+    _id: p._id,
+    name: p.name,
+    barcode: p.barcode || '',
+    category: p.category || 'General',
+    sellingPriceCents: Number(p.sellingPriceCents) || 0,
+    requiresImei,
+    availableImeis,
+    stock: requiresImei ? availableImeis.length : Number(p.qty) || 0,
+  };
+}
 
-  const res = await authFetch(`/pos/sales/items/lookup?${params.toString()}`);
-  return res.data;
+/** Free-text product search (name, brand or barcode). */
+export async function searchProducts(q) {
+  const res = await authFetch(`/pos/sales/items/lookup?q=${encodeURIComponent(q)}`);
+  return (res.data || []).map(normalizeProduct);
+}
+
+/** Exact barcode match, or null. */
+export async function lookupBarcode(barcode) {
+  const res = await authFetch(`/pos/sales/items/lookup?barcode=${encodeURIComponent(barcode)}`);
+  return normalizeProduct(res.data);
+}
+
+/** Exact IMEI match: { product, imeiStatus } or null. */
+export async function lookupImei(imei) {
+  const res = await authFetch(`/pos/sales/items/lookup?imei=${encodeURIComponent(imei)}`);
+  if (!res.data) return null;
+  return { product: normalizeProduct(res.data.product), imeiStatus: res.data.imeiItem?.status || null };
 }
 
 /**
- * Calculates cart line items, discounts, taxes, and trade-in totals.
+ * Completes a checkout. The idempotency key is sent both as a header and in the body
+ * so a retried request (e.g. from the offline queue) never creates a second invoice.
  */
-export async function calculateCart(cartData) {
-  const res = await authFetch('/pos/sales/cart/calculate', {
-    method: 'POST',
-    body: JSON.stringify(cartData),
-  });
-  return res.data;
-}
-
-/**
- * Completes a checkout transaction idempotently.
- */
-export async function checkoutSale(saleData, idempotencyKey = null) {
-  const headers = {};
-  if (idempotencyKey) {
-    headers['Idempotency-Key'] = idempotencyKey;
-  }
-
+export async function checkoutSale(saleData, idempotencyKey) {
   const res = await authFetch('/pos/sales/checkout', {
     method: 'POST',
-    headers,
-    body: JSON.stringify(saleData),
+    headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},
+    body: JSON.stringify({ ...saleData, idempotencyKey }),
   });
   return res.data;
 }
 
-/**
- * Holds the current cart.
- */
+/** Holds a cart. Body shape matches POST /cart/hold: { cartName, customer, lines, discounts }. */
 export async function holdCart(cartData) {
   const res = await authFetch('/pos/sales/cart/hold', {
     method: 'POST',
@@ -52,50 +62,22 @@ export async function holdCart(cartData) {
   return res.data;
 }
 
-/**
- * Fetches active held carts.
- */
 export async function getHeldCarts() {
   const res = await authFetch('/pos/sales/cart/held');
   return res.data || [];
 }
 
-/**
- * Resumes and removes a held cart.
- */
+/** Resumes (and removes) a held cart; returns the stored cart document. */
 export async function resumeCart(id) {
-  const res = await authFetch(`/pos/sales/cart/resume/${id}`, {
-    method: 'POST',
-  });
+  const res = await authFetch(`/pos/sales/cart/resume/${id}`, { method: 'POST' });
   return res.data;
 }
 
-/**
- * Fetches tenant customers for customer search.
- */
-export async function getCustomers(search = '') {
-  try {
-    const res = await authFetch('/customers');
-    const list = res.data || [];
-    if (!search) return list;
-    const lower = search.toLowerCase();
-    return list.filter(
-      (c) =>
-        c.name?.toLowerCase().includes(lower) ||
-        c.phone?.includes(search) ||
-        c.email?.toLowerCase().includes(lower)
-    );
-  } catch {
-    return [];
-  }
+export async function getCustomers() {
+  const res = await authFetch('/customers');
+  return res.data || [];
 }
 
-export default {
-  lookupItems,
-  calculateCart,
-  checkoutSale,
-  holdCart,
-  getHeldCarts,
-  resumeCart,
-  getCustomers,
-};
+/** fetch() rejects with a TypeError when the request never reached the server. */
+export const isNetworkError = (err) =>
+  err instanceof TypeError || (typeof navigator !== 'undefined' && !navigator.onLine);
