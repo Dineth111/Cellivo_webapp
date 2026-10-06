@@ -18,6 +18,7 @@ import * as auditAdapter from '../adapters/audit.adapter.js';
 import { verifyApprovalPin } from '../adapters/approvalPin.adapter.js';
 import { isValidImei } from '../utils/imei.js';
 import * as creditService from './credit.service.js';
+import * as financeService from './finance.service.js';
 
 export const posEvents = new EventEmitter();
 
@@ -496,6 +497,22 @@ export async function completeSale({
             costCents: totalCostCents,
             createdBy: userId,
             session,
+          });
+        }
+
+        // Update active CashSession cash sales if tender includes cash
+        const cashTenderCents = normalizedPayments
+          .filter((p) => p.method === 'cash')
+          .reduce((sum, p) => sum + p.amountCents, 0);
+
+        if (cashTenderCents > 0) {
+          await financeService.updateSessionCashSale({
+            tenantId: tid,
+            branchId: bid,
+            amountCents: cashTenderCents,
+            isRefund: false,
+            session,
+            userId,
           });
         }
 

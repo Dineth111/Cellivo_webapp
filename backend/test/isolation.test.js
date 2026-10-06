@@ -18,6 +18,10 @@ import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import Quotation from '../src/modules/pos/models/Quotation.model.js';
 import CreditNote from '../src/modules/pos/models/CreditNote.model.js';
 import InstallmentPlan from '../src/modules/pos/models/InstallmentPlan.model.js';
+import CashSession from '../src/modules/pos/models/CashSession.model.js';
+import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
+import Cheque from '../src/modules/pos/models/Cheque.model.js';
+import Expense from '../src/modules/pos/models/Expense.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -41,6 +45,10 @@ const MODELS = {
   Quotation,
   CreditNote,
   InstallmentPlan,
+  CashSession,
+  BankAccount,
+  Cheque,
+  Expense,
 };
 
 async function twoShops() {

@@ -626,6 +626,127 @@ export async function getAccountBalances(tenantId, branchId = null) {
   });
 }
 
+/**
+ * Posts Bank Deposit from Drawer Cash.
+ * Debit: Bank (1030)
+ * Credit: Cash (1010)
+ */
+export async function postBankDeposit({
+  tenantId,
+  branchId,
+  amountCents,
+  depositId,
+  createdBy = null,
+  session = null,
+}) {
+  return await postJournal({
+    tenantId,
+    branchId,
+    referenceType: 'payment',
+    referenceId: `DEP-${depositId || Date.now()}`,
+    description: `Cash deposit to bank account`,
+    lines: [
+      { accountCode: '1030', debit: amountCents, credit: 0 },
+      { accountCode: '1010', debit: 0, credit: amountCents },
+    ],
+    createdBy,
+    session,
+  });
+}
+
+/**
+ * Posts Cheque Bounce Reversal.
+ * Customer liability re-established.
+ * Debit: Accounts Receivable (1040)
+ * Credit: Bank (1030)
+ */
+export async function postChequeBounce({
+  tenantId,
+  branchId,
+  amountCents,
+  chequeNumber,
+  reason = 'Cheque bounced',
+  createdBy = null,
+  session = null,
+}) {
+  return await postJournal({
+    tenantId,
+    branchId,
+    referenceType: 'void',
+    referenceId: `CHK-BNC-${chequeNumber}`,
+    description: `Cheque #${chequeNumber} bounce reversal: ${reason}`,
+    lines: [
+      { accountCode: '1040', debit: amountCents, credit: 0 },
+      { accountCode: '1030', debit: 0, credit: amountCents },
+    ],
+    createdBy,
+    session,
+  });
+}
+
+/**
+ * Posts Expense entry.
+ * Debit: Expenses (5020)
+ * Credit: Cash (1010) or Bank (1030)
+ */
+export async function postExpense({
+  tenantId,
+  branchId,
+  amountCents,
+  paymentMethod = 'cash',
+  category,
+  payee,
+  expenseId,
+  createdBy = null,
+  session = null,
+}) {
+  const creditCode = paymentMethod === 'bank' ? '1030' : '1010';
+  return await postJournal({
+    tenantId,
+    branchId,
+    referenceType: 'payment',
+    referenceId: `EXP-${expenseId || Date.now()}`,
+    description: `Expense: ${category} to ${payee}`,
+    lines: [
+      { accountCode: '5020', debit: amountCents, credit: 0 },
+      { accountCode: creditCode, debit: 0, credit: amountCents },
+    ],
+    createdBy,
+    session,
+  });
+}
+
+/**
+ * Posts Other Income entry.
+ * Debit: Cash (1010) or Bank (1030)
+ * Credit: Other income (4020)
+ */
+export async function postOtherIncome({
+  tenantId,
+  branchId,
+  amountCents,
+  paymentMethod = 'cash',
+  description = 'Other Income',
+  reference = null,
+  createdBy = null,
+  session = null,
+}) {
+  const debitCode = paymentMethod === 'bank' ? '1030' : '1010';
+  return await postJournal({
+    tenantId,
+    branchId,
+    referenceType: 'payment',
+    referenceId: reference || `INC-${Date.now()}`,
+    description,
+    lines: [
+      { accountCode: debitCode, debit: amountCents, credit: 0 },
+      { accountCode: '4020', debit: 0, credit: amountCents },
+    ],
+    createdBy,
+    session,
+  });
+}
+
 export default {
   DEFAULT_ACCOUNTS,
   ensureDefaultAccounts,
@@ -639,5 +760,9 @@ export default {
   postStoreCredit,
   postTradeIn,
   postVoidReversal,
+  postBankDeposit,
+  postChequeBounce,
+  postExpense,
+  postOtherIncome,
   getAccountBalances,
 };

@@ -10,6 +10,7 @@ import * as ledgerService from './ledger.service.js';
 import * as stockAdapter from '../adapters/stock.adapter.js';
 import * as auditAdapter from '../adapters/audit.adapter.js';
 import { completeSale } from './sale.service.js';
+import * as financeService from './finance.service.js';
 
 /**
  * Format Credit Note sequence: CN-YYYYMMDD-XXXX
@@ -275,6 +276,18 @@ export async function processReturn({
             restockedCostCents,
             createdBy: userId,
             session,
+          });
+        }
+
+        // Update active CashSession if refund method was cash
+        if (refundMethod === 'cash' && subtotalRefundCents > 0) {
+          await financeService.updateSessionCashSale({
+            tenantId: tid,
+            branchId: bid || invoice.branchId,
+            amountCents: subtotalRefundCents,
+            isRefund: true,
+            session,
+            userId,
           });
         }
 

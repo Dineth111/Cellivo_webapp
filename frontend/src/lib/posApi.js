@@ -176,4 +176,67 @@ export async function calculateInstallmentSchedule(scheduleParams) {
   return res.data;
 }
 
+// -------------------------------------------------------------
+// Phase 7: Cash Drawer and Finance API
+// -------------------------------------------------------------
+
+/**
+ * Gets active open cash drawer session for the cashier.
+ */
+export async function getCurrentDrawerSession() {
+  const res = await authFetch('/pos/finance/drawer/current');
+  return res.data;
+}
+
+/**
+ * Opens a new cash drawer session.
+ */
+export async function openDrawerSession(floatCents = 0, terminalId = 'terminal-1') {
+  const res = await authFetch('/pos/finance/drawer/open', {
+    method: 'POST',
+    body: JSON.stringify({ openingFloatCents: floatCents, terminalId }),
+  });
+  return res.data;
+}
+
+/**
+ * Records a cash movement (cash_in / cash_out).
+ */
+export async function recordCashMovement(movementData) {
+  const res = await authFetch('/pos/finance/drawer/movement', {
+    method: 'POST',
+    body: JSON.stringify(movementData),
+  });
+  return res.data;
+}
+
+/**
+ * Closes the drawer session with denomination breakdown and optional manager PIN.
+ */
+export async function closeDrawerSession(closeData) {
+  const res = await authFetch('/pos/finance/drawer/close', {
+    method: 'POST',
+    body: JSON.stringify(closeData),
+  });
+  return res.data;
+}
+
+/**
+ * Retrieves the Z-Report for a closed session.
+ */
+export async function getZReport(sessionId) {
+  const res = await authFetch(`/pos/finance/drawer/z-report/${encodeURIComponent(sessionId)}`);
+  return res.data;
+}
+
+/**
+ * Retrieves the day-end finance reconciliation summary.
+ */
+export async function getDayEndReport(date = null) {
+  const url = date ? `/pos/finance/day-end?date=${encodeURIComponent(date)}` : '/pos/finance/day-end';
+  const res = await authFetch(url);
+  return res.data;
+}
+
+
 

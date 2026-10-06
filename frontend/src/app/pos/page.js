@@ -14,6 +14,8 @@ import {
 import PaymentModal from '../../components/pos/PaymentModal';
 import ReturnModal from '../../components/pos/ReturnModal';
 import CreditManagementModal from '../../components/pos/CreditManagementModal';
+import CloseDrawerModal from '../../components/pos/CloseDrawerModal';
+import CashMovementModal from '../../components/pos/CashMovementModal';
 import useCart, { OFFLINE_MESSAGE } from '../../hooks/useCart';
 import {
   searchProducts,
@@ -23,6 +25,8 @@ import {
   getHeldCarts,
   resumeCart,
   getCustomers,
+  getCurrentDrawerSession,
+  openDrawerSession,
 } from '../../lib/posApi';
 import styles from './pos.module.css';
 
@@ -65,6 +69,9 @@ export default function PosPage() {
   const [isHeldOpen, setIsHeldOpen] = useState(false);
   const [isReturnOpen, setIsReturnOpen] = useState(false);
   const [isCreditMgmtOpen, setIsCreditMgmtOpen] = useState(false);
+  const [isCloseDrawerOpen, setIsCloseDrawerOpen] = useState(false);
+  const [isMovementOpen, setIsMovementOpen] = useState(false);
+  const [drawerSession, setDrawerSession] = useState(null);
   const [tradeInImei, setTradeInImei] = useState('');
   const [tradeInModel, setTradeInModel] = useState('');
   const [tradeInValuation, setTradeInValuation] = useState('');
@@ -74,12 +81,16 @@ export default function PosPage() {
 
   const searchInputRef = useRef(null);
 
-  // Load customers, initial product search, and global keyboard shortcuts on mount
+  // Load customers, initial product search, drawer session, and global keyboard shortcuts on mount
   useEffect(() => {
     searchInputRef.current?.focus();
 
     getCustomers()
       .then((data) => setCustomers(data || []))
+      .catch(() => {});
+
+    getCurrentDrawerSession()
+      .then((session) => setDrawerSession(session || null))
       .catch(() => {});
 
     // Initial search to populate catalog
@@ -310,6 +321,31 @@ export default function PosPage() {
         <Button variant="secondary" onClick={() => setIsCreditMgmtOpen(true)} className={styles.cartHeaderBtn}>
           Credit / Dues (F6)
         </Button>
+        {drawerSession?.status === 'open' ? (
+          <>
+            <Button variant="secondary" onClick={() => setIsMovementOpen(true)} className={styles.cartHeaderBtn}>
+              Cash In/Out
+            </Button>
+            <Button variant="secondary" onClick={() => setIsCloseDrawerOpen(true)} className={styles.cartHeaderBtn}>
+              Close Drawer ({money(drawerSession.expectedCashCents || 0)})
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              try {
+                const s = await openDrawerSession(0);
+                setDrawerSession(s);
+              } catch (e) {
+                setBannerAlert({ tone: 'danger', text: e.message || 'Failed to open drawer session' });
+              }
+            }}
+            className={styles.cartHeaderBtn}
+          >
+            Open Drawer
+          </Button>
+        )}
         <Button variant="secondary" onClick={handleOpenHeld} className={styles.cartHeaderBtn}>
           Held Carts
         </Button>
@@ -777,6 +813,28 @@ export default function PosPage() {
         isOpen={isCreditMgmtOpen}
         onClose={() => setIsCreditMgmtOpen(false)}
         customers={customers}
+      />
+
+      {/* Cash Movement Modal (Pay-In / Pay-Out) */}
+      <CashMovementModal
+        isOpen={isMovementOpen}
+        onClose={() => setIsMovementOpen(false)}
+        session={drawerSession}
+        onSuccess={(updated) => setDrawerSession(updated)}
+      />
+
+      {/* Close Drawer Modal with Z-Report */}
+      <CloseDrawerModal
+        isOpen={isCloseDrawerOpen}
+        onClose={() => setIsCloseDrawerOpen(false)}
+        session={drawerSession}
+        onSuccess={(closed) => {
+          setDrawerSession(null);
+          setBannerAlert({
+            tone: 'success',
+            text: `Cash drawer closed successfully. Z-Report ${closed.zReport?.reportId} generated.`,
+          });
+        }}
       />
     </div>
   );
