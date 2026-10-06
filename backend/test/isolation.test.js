@@ -11,13 +11,33 @@ import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerAccount from '../src/modules/pos/models/LedgerAccount.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import InvoiceSequence from '../src/modules/pos/models/InvoiceSequence.model.js';
+import Invoice from '../src/modules/pos/models/Invoice.model.js';
+import Payment from '../src/modules/pos/models/Payment.model.js';
+import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
+import Quotation from '../src/modules/pos/models/Quotation.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
 beforeEach(resetDb);
 
 // Add every new tenant-owned model here (see docs/architecture/tenancy.md).
-const MODELS = { Customer, User, Role, Branch, Session, AuditLog, LedgerAccount, LedgerEntry, FakeStock };
+const MODELS = {
+  Customer,
+  User,
+  Role,
+  Branch,
+  Session,
+  AuditLog,
+  LedgerAccount,
+  LedgerEntry,
+  FakeStock,
+  InvoiceSequence,
+  Invoice,
+  Payment,
+  HeldCart,
+  Quotation,
+};
 
 async function twoShops() {
   const a = await signup('a@shop.lk', 'Shop A');
