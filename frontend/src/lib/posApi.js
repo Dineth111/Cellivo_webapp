@@ -84,6 +84,36 @@ export async function getInvoiceById(id) {
   return res.data;
 }
 
+/**
+ * Looks up an invoice for return and calculates eligible items/quantities.
+ */
+export async function lookupReturnInvoice(invoiceNumber) {
+  const res = await authFetch(`/pos/returns/lookup/${encodeURIComponent(invoiceNumber)}`);
+  return res.data;
+}
+
+/**
+ * Processes a return and generates a CreditNote.
+ */
+export async function processReturn(returnData) {
+  const res = await authFetch('/pos/returns', {
+    method: 'POST',
+    body: JSON.stringify(returnData),
+  });
+  return res.data;
+}
+
+/**
+ * Processes an atomic exchange combining return and new purchase.
+ */
+export async function processExchange(exchangeData) {
+  const res = await authFetch('/pos/returns/exchange', {
+    method: 'POST',
+    body: JSON.stringify(exchangeData),
+  });
+  return res.data;
+}
+
 /** fetch() rejects with a TypeError when the request never reached the server. */
 export const isNetworkError = (err) =>
   err instanceof TypeError || (typeof navigator !== 'undefined' && !navigator.onLine);

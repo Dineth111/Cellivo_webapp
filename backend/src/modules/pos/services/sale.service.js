@@ -16,6 +16,7 @@ import * as ledgerService from './ledger.service.js';
 import * as stockAdapter from '../adapters/stock.adapter.js';
 import * as auditAdapter from '../adapters/audit.adapter.js';
 import { verifyApprovalPin } from '../adapters/approvalPin.adapter.js';
+import { isValidImei } from '../utils/imei.js';
 
 export const posEvents = new EventEmitter();
 
@@ -99,16 +100,40 @@ export async function completeSale({
     }
 
     // 2. Validate Customer and credit conditions
-    let customerSnapshot = { name: 'Walk-in Customer', phone: '', email: '' };
+    let customerSnapshot = { name: 'Walk-in Customer', phone: '', email: '', nic: '' };
+    let isWholesaleCustomer = false;
+    let customerNic = '';
     if (customerId) {
       const cust = await Customer.findById(customerId).lean();
       if (!cust) throw notFound('Customer not found');
-      customerSnapshot = { name: cust.name, phone: cust.phone || '', email: cust.email || '' };
+      customerSnapshot = { name: cust.name, phone: cust.phone || '', email: cust.email || '', nic: cust.nic || '' };
+      customerNic = cust.nic || '';
+      isWholesaleCustomer = cust.type === 'wholesale';
     }
 
     const isCreditSale = payments.some((p) => p.method === 'credit');
     if (isCreditSale && !customerId) {
       throw badRequest('Walk-in customers cannot purchase on credit. Please select a customer.', 'CREDIT_REQUIRES_CUSTOMER');
+    }
+
+    // Trade-in regulatory compliance (IMEI Luhn check + Customer NIC identification)
+    if (tradeIn || (tradeInValueCents && tradeInValueCents > 0)) {
+      if (tradeIn) {
+        const imeiStr = tradeIn.imei ? String(tradeIn.imei).trim() : '';
+        const isNumeric = imeiStr && /^\d+$/.test(imeiStr);
+        const isStandardImei = imeiStr && /^\d{14,16}$/.test(imeiStr);
+
+        if ((isNumeric && !isValidImei(imeiStr)) || (tradeIn.compliance && !isValidImei(imeiStr))) {
+          throw badRequest('Invalid trade-in IMEI: failed Luhn checksum validation', 'INVALID_TRADE_IN_IMEI');
+        }
+
+        if (isStandardImei || tradeIn.compliance) {
+          const identity = customerNic || tradeIn.customerNic || tradeIn.nic || (data.customerNic ? String(data.customerNic).trim() : '');
+          if (!identity) {
+            throw badRequest('Trade-in compliance requires customer identity verification (NIC / Passport)', 'TRADE_IN_NIC_REQUIRED');
+          }
+        }
+      }
     }
 
     // 3. Validate items, IMEI duplication, and prices
@@ -120,7 +145,17 @@ export async function completeSale({
 
     for (const raw of lines) {
       const qty = Number(raw.qty || 1);
-      const unitPriceCents = money.round(raw.unitPriceCents ?? raw.priceCents ?? 0);
+
+      // Auto-apply wholesale price if customer is wholesale and raw price wasn't manually overridden
+      let unitPriceCents = money.round(raw.unitPriceCents ?? raw.priceCents ?? 0);
+      if (isWholesaleCustomer && raw.wholesalePriceCents && raw.wholesalePriceCents > 0) {
+        unitPriceCents = money.round(raw.wholesalePriceCents);
+      } else if (isWholesaleCustomer && (raw.barcode || raw.imei)) {
+        const stockItem = await stockAdapter.lookupByBarcode(tid, bid, raw.barcode);
+        if (stockItem && stockItem.wholesalePriceCents > 0) {
+          unitPriceCents = money.round(stockItem.wholesalePriceCents);
+        }
+      }
 
       // IMEI validations
       if (raw.imei) {

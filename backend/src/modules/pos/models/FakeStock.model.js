@@ -19,6 +19,7 @@ const fakeStockSchema = new mongoose.Schema(
     category: { type: String, default: 'General' },
     brand: { type: String, default: '' },
     sellingPriceCents: { type: Number, required: true, min: 0 },
+    wholesalePriceCents: { type: Number, default: 0, min: 0 },
     costPriceCents: { type: Number, default: 0, min: 0 },
     qty: { type: Number, default: 0, min: 0 },
     imeiList: { type: [imeiItemSchema], default: [] },

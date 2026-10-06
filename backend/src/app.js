@@ -18,6 +18,7 @@ import publicRoutes from './modules/public/public.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
 import posLedgerRoutes from './modules/pos/routes/ledger.routes.js';
 import posSaleRoutes from './modules/pos/routes/sale.routes.js';
+import posReturnRoutes from './modules/pos/routes/return.routes.js';
 
 export function createApp() {
   const app = express();
@@ -58,6 +59,7 @@ export function createApp() {
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
   app.use('/api/pos/ledger', posLedgerRoutes);
   app.use('/api/pos/sales', posSaleRoutes);
+  app.use('/api/pos/returns', posReturnRoutes);
   app.use('/api/pos', posSaleRoutes);
 
   app.use(notFoundHandler);

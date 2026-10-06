@@ -7,7 +7,7 @@ const paymentSchema = new mongoose.Schema(
     invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'PosInvoice', required: true, index: true },
     method: {
       type: String,
-      enum: ['cash', 'card', 'bank_transfer', 'cheque', 'credit', 'loyalty_points'],
+      enum: ['cash', 'card', 'bank_transfer', 'cheque', 'credit', 'store_credit', 'loyalty_points'],
       required: true,
     },
     amountCents: { type: Number, required: true, min: 0 },

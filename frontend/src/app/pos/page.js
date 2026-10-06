@@ -12,6 +12,7 @@ import {
   money,
 } from '../../components/ui';
 import PaymentModal from '../../components/pos/PaymentModal';
+import ReturnModal from '../../components/pos/ReturnModal';
 import useCart, { OFFLINE_MESSAGE } from '../../hooks/useCart';
 import {
   searchProducts,
@@ -61,6 +62,7 @@ export default function PosPage() {
   const [customers, setCustomers] = useState([]);
   const [heldCarts, setHeldCarts] = useState([]);
   const [isHeldOpen, setIsHeldOpen] = useState(false);
+  const [isReturnOpen, setIsReturnOpen] = useState(false);
   const [tradeInImei, setTradeInImei] = useState('');
   const [tradeInModel, setTradeInModel] = useState('');
   const [tradeInValuation, setTradeInValuation] = useState('');
@@ -70,7 +72,7 @@ export default function PosPage() {
 
   const searchInputRef = useRef(null);
 
-  // Load customers and initial product search on mount
+  // Load customers, initial product search, and global keyboard shortcuts on mount
   useEffect(() => {
     searchInputRef.current?.focus();
 
@@ -82,7 +84,19 @@ export default function PosPage() {
     searchProducts('')
       .then((data) => setProducts(data || []))
       .catch(() => {});
-  }, []);
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'F4') {
+        e.preventDefault();
+        setIsReturnOpen(true);
+      } else if (e.key === 'F9') {
+        e.preventDefault();
+        setIsPaymentOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setIsPaymentOpen]);
 
   const handleSearchChange = async (e) => {
     const val = e.target.value;
@@ -285,6 +299,9 @@ export default function PosPage() {
             {queue.length} Queued Offline
           </Badge>
         )}
+        <Button variant="secondary" onClick={() => setIsReturnOpen(true)} className={styles.cartHeaderBtn}>
+          Returns (F4)
+        </Button>
         <Button variant="secondary" onClick={handleOpenHeld} className={styles.cartHeaderBtn}>
           Held Carts
         </Button>
@@ -474,10 +491,15 @@ export default function PosPage() {
               <option value="">Walk-in Customer</option>
               {customers.map((c) => (
                 <option key={c._id} value={c._id}>
-                  {c.name} ({c.phone || 'No phone'})
+                  {c.name} ({c.phone || 'No phone'}){c.type === 'wholesale' ? ' ★ Wholesale' : ''}
                 </option>
               ))}
             </select>
+            {customer?.type === 'wholesale' && (
+              <div style={{ marginTop: 6 }}>
+                <Badge tone="brand">★ Wholesale Tier Applied</Badge>
+              </div>
+            )}
           </div>
 
           {/* Cart Line Items */}
@@ -718,6 +740,28 @@ export default function PosPage() {
         onSubmitCheckout={submitCheckout}
         onSuccess={handleCheckoutSuccess}
         isOnline={isOnline}
+      />
+
+      {/* Return & Exchange Modal */}
+      <ReturnModal
+        isOpen={isReturnOpen}
+        onClose={() => setIsReturnOpen(false)}
+        currentCartLines={lines}
+        currentCustomer={customer}
+        onSuccess={(result) => {
+          if (result?.type === 'exchange') {
+            clearCart();
+            setBannerAlert({
+              tone: 'success',
+              text: `Counter Exchange complete! CN #${result.creditNoteNumber} issued towards Invoice #${result.exchangeInvoiceNumber}.`,
+            });
+          } else if (result?.creditNoteNumber) {
+            setBannerAlert({
+              tone: 'success',
+              text: `Return processed successfully! Credit Note #${result.creditNoteNumber} issued.`,
+            });
+          }
+        }}
       />
     </div>
   );
