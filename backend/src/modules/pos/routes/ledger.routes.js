@@ -1,0 +1,62 @@
+import express from 'express';
+import { protect } from '../../../core/auth.js';
+import { subscriptionGuard } from '../../plans/planLimits.js';
+import { wrap, badRequest } from '../../../core/errors.js';
+import * as ledgerService from '../services/ledger.service.js';
+
+const router = express.Router();
+
+// Guard with session authentication and tenant subscription status
+router.use(protect, subscriptionGuard);
+
+/**
+ * POST /api/pos/ledger/journal
+ * Accepts journal lines and invokes postJournal (used by POS, Dev 4 Purchasing & Dev 5 Repairs).
+ */
+router.post(
+  '/journal',
+  wrap(async (req, res) => {
+    const { branchId, referenceType, referenceId, description, lines } = req.body;
+    if (!referenceType) {
+      throw badRequest('referenceType is required', 'MISSING_FIELD');
+    }
+    if (!lines || !Array.isArray(lines)) {
+      throw badRequest('lines array is required', 'MISSING_FIELD');
+    }
+
+    const entry = await ledgerService.postJournal({
+      tenantId: req.auth.tenantId,
+      branchId: branchId || req.auth.branchIds?.[0] || null,
+      referenceType,
+      referenceId,
+      description,
+      lines,
+      createdBy: req.auth.userId,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Journal entry posted successfully',
+      data: entry,
+    });
+  })
+);
+
+/**
+ * GET /api/pos/ledger/balances
+ * Returns account balances for the current tenant.
+ */
+router.get(
+  '/balances',
+  wrap(async (req, res) => {
+    const branchId = req.query.branchId || null;
+    const balances = await ledgerService.getAccountBalances(req.auth.tenantId, branchId);
+
+    res.json({
+      success: true,
+      data: balances,
+    });
+  })
+);
+
+export default router;

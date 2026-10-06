@@ -6,7 +6,13 @@ let repl;
 
 // Replica set mode so multi-document transactions work.
 export async function startDb() {
-  repl = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  const binary = process.env.MONGOMS_SYSTEM_BINARY
+    ? { systemBinary: process.env.MONGOMS_SYSTEM_BINARY }
+    : { systemBinary: 'C:\\Program Files\\MongoDB\\Server\\8.3\\bin\\mongod.exe' };
+  repl = await MongoMemoryReplSet.create({
+    binary,
+    replSet: { count: 1 },
+  });
   await mongoose.connect(repl.getUri('cellivo_test'));
 }
 

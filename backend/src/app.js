@@ -16,6 +16,7 @@ import billingRoutes from './modules/billing/billing.routes.js';
 import signupRoutes from './modules/signup/signup.routes.js';
 import publicRoutes from './modules/public/public.routes.js';
 import adminRoutes from './modules/admin/admin.routes.js';
+import posLedgerRoutes from './modules/pos/routes/ledger.routes.js';
 
 export function createApp() {
   const app = express();
@@ -54,6 +55,7 @@ export function createApp() {
   app.use('/api/signup', signupRoutes);
   app.use('/api/public', publicRoutes);
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
+  app.use('/api/pos/ledger', posLedgerRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
