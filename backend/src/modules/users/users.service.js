@@ -1,9 +1,10 @@
 import User from './User.model.js';
 import Role from '../roles/Role.model.js';
 import Branch from '../branches/Branch.model.js';
-import { getContext } from '../../core/tenantContext.js';
-import { hashPassword, newToken } from '../../core/password.js';
-import { badRequest, conflict, forbidden, notFound } from '../../core/errors.js';
+import { getContext, runAsPlatform } from '../../core/tenantContext.js';
+import { hashPassword, newToken, verifyPassword } from '../../core/password.js';
+import { AppError, badRequest, conflict, forbidden, notFound } from '../../core/errors.js';
+import { SPECIALS } from '../../core/permissions.js';
 import { str, isId, requireId } from '../../core/validate.js';
 import { config } from '../../core/config.js';
 import audit from '../../core/audit.js';
@@ -107,3 +108,68 @@ export async function setActive(id, active) {
 }
 
 export const getUser = load;
+
+const PIN_MAX_FAILURES = 5;
+const PIN_WINDOW_MS = 15 * 60 * 1000; // failure window and lock length
+const pinLocked = () => new AppError(429, 'Too many wrong approval PINs. Try again in 15 minutes.', 'PIN_LOCKED');
+
+/**
+ * Checks an approval PIN typed in by `requestedBy`. Approvers are active users of the tenant with a PIN
+ * whose role is owner or has `special`. 5 wrong PINs in 15 minutes lock the requesting user for 15
+ * minutes (stored on the user, so it survives restarts and is shared between instances).
+ * Returns { approverId }, or null for a wrong or empty PIN. Throws 429 PIN_LOCKED while locked.
+ *
+ * Each attempt is reserved (counted) atomically BEFORE the bcrypt compare, so parallel requests can
+ * never get more than 5 compares in: once the count reaches 5 the lock is set in the same update.
+ */
+export async function verifyApprovalPin({ tenantId, requestedBy, pin, special = 'approve_discount' }) {
+  if (!SPECIALS.includes(special)) throw badRequest('Unknown approval permission');
+  const { ip, device } = getContext() || {}; // runAsPlatform drops the request context; keep these for the audit
+  return runAsPlatform(async () => {
+    const now = new Date();
+    const notLocked = { $or: [{ pinLockedUntil: null }, { pinLockedUntil: { $lte: now } }] };
+    if (!pin) {
+      // nothing to compare, so nothing to count; still report a lock
+      if (await User.exists({ _id: requestedBy, tenantId, pinLockedUntil: { $gt: now } })) throw pinLocked();
+      return null;
+    }
+
+    // Reserve the attempt: count it in the current window (or start a new one), lock when it reaches the limit.
+    const inWindow = { $gte: [{ $ifNull: ['$pinFailedSince', new Date(0)] }, new Date(now - PIN_WINDOW_MS)] };
+    const reserved = await User.findOneAndUpdate(
+      { _id: requestedBy, tenantId, ...notLocked },
+      [
+        {
+          $set: {
+            pinFailedAttempts: { $cond: [inWindow, { $add: [{ $ifNull: ['$pinFailedAttempts', 0] }, 1] }, 1] },
+            pinFailedSince: { $cond: [inWindow, '$pinFailedSince', now] },
+          },
+        },
+        { $set: { pinLockedUntil: { $cond: [{ $gte: ['$pinFailedAttempts', PIN_MAX_FAILURES] }, new Date(+now + PIN_WINDOW_MS), null] } } },
+      ],
+      { new: true, projection: { pinFailedAttempts: 1, pinLockedUntil: 1 } }
+    ).lean();
+    if (!reserved) throw pinLocked(); // locked (or not a user of this tenant): no compare
+
+    const roles = await Role.find({ tenantId, $or: [{ key: 'owner' }, { [`special.${special}`]: true }] }).select('_id').lean();
+    const approvers = await User.find({
+      tenantId,
+      isActive: true,
+      approvalPinHash: { $ne: null },
+      roleId: { $in: roles.map((r) => r._id) },
+    }).select('+approvalPinHash');
+    for (const u of approvers) {
+      if (await verifyPassword(String(pin), u.approvalPinHash)) {
+        await User.updateOne({ _id: requestedBy, tenantId }, { pinFailedAttempts: 0, pinFailedSince: null, pinLockedUntil: null });
+        return { approverId: u._id };
+      }
+    }
+
+    // Wrong PIN: the attempt is already counted (and the lock set, if this was the 5th).
+    const attempts = reserved.pinFailedAttempts;
+    const auditBase = { entity: 'User', entityId: requestedBy, tenantId, userId: requestedBy, ip, device };
+    await audit.record({ ...auditBase, action: 'pin.verify_failed', after: { special, failuresInWindow: attempts } });
+    if (reserved.pinLockedUntil) await audit.record({ ...auditBase, action: 'pin.locked', after: { lockedUntil: reserved.pinLockedUntil } });
+    return null;
+  });
+}

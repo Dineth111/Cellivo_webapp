@@ -14,7 +14,7 @@ Each item states the safe default that was implemented. Confirm or change.
 8. **Custom roles are a Starter+ feature** (FRS F-04). Not enforced; needs Dev 2's plan-limit service (TODO in roles controller).
 9. **Currency by country.** New tenants get LKR and Asia/Colombo regardless of country.
 10. **Tenant idle timeout** (10 to 240 min) is stored on Tenant but there is no settings endpoint yet (F-19 settings screen).
-11. **Approval PIN** is stored (bcrypt) but there is no verify endpoint yet; Dev 3 needs one for POS-04. Suggest `POST /api/users/verify-pin` returning the approver's id, rate limited.
+11. ~~**Approval PIN** verify endpoint.~~ **Resolved:** `POST /api/users/verify-pin` built with item 25.
 
 ## Security / technical
 
@@ -30,3 +30,15 @@ Each item states the safe default that was implemented. Confirm or change.
 21. **Branches endpoint** is read-only. Create/edit with the plan limit (BR-01) is not built yet.
 22. **Aggregations using `$geoNear` or `$search`** cannot go through the tenant plugin (they must be the first stage). See docs/architecture/tenancy.md.
 23. **Line endings.** The repo mixes CRLF and LF (Windows). Consider a `.gitattributes` with `* text=auto eol=lf`.
+
+## POS review fixes (Dev 3)
+
+24. ~~**Trade-in limit per role.**~~ **Resolved:** `Role.tradeInLimitCents` added, editable in the roles API (whole cents, 0 or more). **Assumption:** default roles get branch manager Rs 50,000 (5,000,000 cents), every other role 0; the owner has no limit.
+25. ~~**Approval PIN lockout is in memory.**~~ **Resolved:** `users.service verifyApprovalPin` + `POST /api/users/verify-pin`; the lockout (5 wrong PINs in 15 min -> locked 15 min, 429 `PIN_LOCKED`) is stored on the requesting user and audited (`pin.verify_failed`, `pin.locked`). The POS adapter calls it.
+26. ~~**PIN in a query string.**~~ **Resolved:** the GET eligibility check ignores any PIN; the PIN-checked variant is `POST /api/pos/credit/customers/:id/eligibility { pin, amountCents }`. Frontend `posApi.js` updated.
+27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
+28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
+
+## Go-live checklist
+
+- Before importing any real shop data, confirm every role has tradeInLimitCents set.

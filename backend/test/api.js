@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { createApp } from '../src/app.js';
-import { runAsPlatform } from '../src/core/tenantContext.js';
+import { runAsPlatform, runWithContext } from '../src/core/tenantContext.js';
+import Branch from '../src/modules/branches/Branch.model.js';
 import User from '../src/modules/users/User.model.js';
 import Session from '../src/modules/auth/Session.model.js';
 import * as authSvc from '../src/modules/auth/auth.service.js';
@@ -41,3 +42,10 @@ export async function addStaff(owner, roleKey, email) {
 }
 
 export const sessionsOf = (userId) => runAsPlatform(async () => await Session.find({ userId }));
+
+/** Creates another branch for a tenant (the branches API is read-only). Pass userIds to give them access. */
+export async function addBranch(tenantId, { name = 'Second Branch', invoicePrefix = 'B2', userIds = [] } = {}) {
+  const branch = await runWithContext({ tenantId }, async () => await Branch.create({ name, invoicePrefix }));
+  if (userIds.length) await runAsPlatform(async () => await User.updateMany({ _id: { $in: userIds } }, { $addToSet: { branchIds: branch._id } }));
+  return branch;
+}

@@ -1,0 +1,103 @@
+.pageContainer {
+  min-height: 100vh;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+.actionBar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.actionLeft {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.actionRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.templateSelector {
+  display: flex;
+  gap: 6px;
+  background: var(--bg);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.templateBtn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--body);
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.15s ease;
+}
+
+.templateBtn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.activeTemplate {
+  background: var(--surface) !important;
+  color: var(--brand) !important;
+  font-weight: 700 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.actionBtn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 18px;
+  font-size: 0.9rem;
+}
+
+.previewArea {
+  flex: 1;
+  padding: 24px;
+  display: flex;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+.stateMessage {
+  padding: 40px 20px;
+  text-align: center;
+  max-width: 500px;
+  margin: 40px auto;
+}
+
+@media print {
+  .actionBar {
+    display: none !important;
+  }
+
+  .previewArea {
+    padding: 0 !important;
+    overflow: visible !important;
+    background: transparent !important;
+  }
+
+  .pageContainer {
+    background: transparent !important;
+  }
+}

@@ -1,6 +1,7 @@
 import User from './User.model.js';
 import * as svc from './users.service.js';
 import { str, escapeRegex, pageParams } from '../../core/validate.js';
+import { badRequest, forbidden } from '../../core/errors.js';
 
 export const list = async (req, res) => {
   const filter = {};
@@ -30,3 +31,14 @@ export const update = async (req, res) => res.json({ success: true, data: await 
 
 export const deactivate = async (req, res) => res.json({ success: true, data: await svc.setActive(req.params.id, false) });
 export const activate = async (req, res) => res.json({ success: true, data: await svc.setActive(req.params.id, true) });
+
+// POST /api/users/verify-pin { pin, special? }: the PIN is only ever read from the body.
+export const verifyPin = async (req, res) => {
+  if (req.query.pin !== undefined) throw badRequest('Send the PIN in the request body');
+  const pin = str(req.body?.pin);
+  if (!pin || !/^\d{4,6}$/.test(pin)) throw badRequest('Approval PIN must be 4 to 6 digits');
+  const special = str(req.body.special) || undefined;
+  const result = await svc.verifyApprovalPin({ tenantId: req.auth.tenantId, requestedBy: req.auth.userId, pin, special });
+  if (!result) throw forbidden('Invalid approval PIN', 'INVALID_PIN');
+  res.json({ success: true, data: result });
+};

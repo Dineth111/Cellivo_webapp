@@ -2,6 +2,7 @@ import { config, assertConfig } from './core/config.js';
 import connectDB from './core/db.js';
 import { createApp } from './app.js';
 import { runBillingCycle } from './modules/billing/billing.service.js';
+import { cleanAllExpiredHeldCarts } from './modules/pos/services/sale.service.js';
 
 // Fail closed: never start with missing secrets.
 try {
@@ -21,6 +22,11 @@ try {
 // Renewals, retries, suspension (FRS F-02). Manual run: POST /api/admin/billing/run.
 if (config.billingJobMinutes > 0) {
   setInterval(() => runBillingCycle().catch((e) => console.error('[billing job]', e)), config.billingJobMinutes * 60_000).unref();
+}
+
+// Expired POS held carts release their IMEI reservations (FRS F-09).
+if (config.env !== 'test') {
+  setInterval(() => cleanAllExpiredHeldCarts().catch((e) => console.error('[held carts job]', e)), 15 * 60_000).unref();
 }
 
 createApp().listen(config.port, () => {

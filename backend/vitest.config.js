@@ -1,4 +1,12 @@
+import { mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+
+// Vitest's own temp files (transformed modules) go to the project folder too, not the OS temp dir on C:.
+// This runs before Vitest creates its temp dir; workers inherit the env.
+const TEST_TMP = fileURLToPath(new URL('./.test-tmp/', import.meta.url));
+mkdirSync(TEST_TMP, { recursive: true });
+process.env.TEMP = process.env.TMP = process.env.TMPDIR = TEST_TMP;
 
 export default defineConfig({
   test: {
@@ -12,6 +20,8 @@ export default defineConfig({
       JWT_SECRET: 'test-secret-test-secret-test-secret',
       MONGO_URI: 'mongodb://unused',
       AUTH_RATE_LIMIT_MAX: '100000',
+      // keep downloaded mongod binaries next to the project, not in the user profile on C:
+      MONGOMS_DOWNLOAD_DIR: fileURLToPath(new URL('./.mongodb-binaries', import.meta.url)),
     },
     coverage: {
       provider: 'v8',

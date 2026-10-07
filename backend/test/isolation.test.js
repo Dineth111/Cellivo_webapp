@@ -8,13 +8,50 @@ import Role from '../src/modules/roles/Role.model.js';
 import Branch from '../src/modules/branches/Branch.model.js';
 import Session from '../src/modules/auth/Session.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
+import LedgerAccount from '../src/modules/pos/models/LedgerAccount.model.js';
+import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
+import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import InvoiceSequence from '../src/modules/pos/models/InvoiceSequence.model.js';
+import Invoice from '../src/modules/pos/models/Invoice.model.js';
+import Payment from '../src/modules/pos/models/Payment.model.js';
+import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
+import Quotation from '../src/modules/pos/models/Quotation.model.js';
+import CreditNote from '../src/modules/pos/models/CreditNote.model.js';
+import InstallmentPlan from '../src/modules/pos/models/InstallmentPlan.model.js';
+import CashSession from '../src/modules/pos/models/CashSession.model.js';
+import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
+import Cheque from '../src/modules/pos/models/Cheque.model.js';
+import Expense from '../src/modules/pos/models/Expense.model.js';
+import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
 beforeEach(resetDb);
 
 // Add every new tenant-owned model here (see docs/architecture/tenancy.md).
-const MODELS = { Customer, User, Role, Branch, Session, AuditLog };
+const MODELS = {
+  Customer,
+  User,
+  Role,
+  Branch,
+  Session,
+  AuditLog,
+  LedgerAccount,
+  LedgerEntry,
+  FakeStock,
+  InvoiceSequence,
+  Invoice,
+  Payment,
+  HeldCart,
+  Quotation,
+  CreditNote,
+  InstallmentPlan,
+  CashSession,
+  BankAccount,
+  Cheque,
+  Expense,
+  LoyaltyTransaction,
+};
 
 async function twoShops() {
   const a = await signup('a@shop.lk', 'Shop A');

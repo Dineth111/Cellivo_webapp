@@ -15,6 +15,7 @@ const roleSchema = new mongoose.Schema(
     grid,
     special,
     discountLimitPercent: { type: Number, default: 0, min: 0, max: 100 },
+    tradeInLimitCents: { type: Number, default: 0, min: 0 }, // POS ignores it for the owner (no limit)
   },
   { timestamps: true, minimize: false }
 );
