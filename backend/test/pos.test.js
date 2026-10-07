@@ -8,7 +8,8 @@ import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
 import User from '../src/modules/users/User.model.js';
-import { posEvents } from '../src/modules/pos/services/sale.service.js';
+import { posEvents, cleanAllExpiredHeldCarts } from '../src/modules/pos/services/sale.service.js';
+import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 
@@ -724,5 +725,22 @@ describe('POS review fixes', () => {
     const blocked = await voidIt(sold.body.data._id);
     expect(blocked.status).toBe(400);
     expect(blocked.body.code).toBe('CANNOT_VOID_RETURNED');
+  });
+
+  it('10a. the held-cart job cleans expired carts for every tenant', async () => {
+    const a = await setupShop('held-a@shop.lk', 'Held A');
+    const b = await setupShop('held-b@shop.lk', 'Held B');
+    const past = new Date(Date.now() - 60_000);
+    for (const s of [a, b]) {
+      await runWithContext({ tenantId: s.tenantId }, async () =>
+        HeldCart.create([
+          { branchId: s.branchId, cartName: 'old', lines: [], heldBy: s.userId, expiresAt: past },
+          { branchId: s.branchId, cartName: 'new', lines: [], heldBy: s.userId, expiresAt: new Date(Date.now() + 60_000) },
+        ])
+      );
+    }
+    expect((await cleanAllExpiredHeldCarts()).cleanedCount).toBe(2);
+    const left = await runAsPlatform(async () => HeldCart.find({}).lean());
+    expect(left.map((c) => c.cartName)).toEqual(['new', 'new']);
   });
 });

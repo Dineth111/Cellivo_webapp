@@ -10,7 +10,7 @@ import InstallmentPlan from '../models/InstallmentPlan.model.js';
 import Customer from '../../customers/Customer.model.js';
 import Branch from '../../branches/Branch.model.js';
 import Tenant from '../../tenants/Tenant.model.js';
-import { runWithContext } from '../../../core/tenantContext.js';
+import { runWithContext, runAsPlatform } from '../../../core/tenantContext.js';
 import { badRequest, notFound, forbidden, AppError } from '../../../core/errors.js';
 import { hasSpecial } from '../../../core/permissions.js';
 import * as money from '../money.js';
@@ -752,6 +752,18 @@ export async function cleanExpiredHeldCarts({ tenantId }) {
 }
 
 /**
+ * Background job: cleans expired held carts for every tenant that has any.
+ */
+export async function cleanAllExpiredHeldCarts() {
+  const tenantIds = await runAsPlatform(async () => await HeldCart.distinct('tenantId', { expiresAt: { $lt: new Date() } }));
+  let cleanedCount = 0;
+  for (const tenantId of tenantIds) {
+    cleanedCount += (await cleanExpiredHeldCarts({ tenantId })).cleanedCount;
+  }
+  return { cleanedCount };
+}
+
+/**
  * Creates a quotation.
  */
 export async function createQuotation({
@@ -898,6 +910,7 @@ export default {
   holdCart,
   resumeCart,
   cleanExpiredHeldCarts,
+  cleanAllExpiredHeldCarts,
   createQuotation,
   convertQuotationToInvoice,
   getInvoiceById,
