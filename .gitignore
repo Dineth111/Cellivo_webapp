@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local dev MongoDB data (core/db.js replica set)
 backend/.mongodb_data/
+
+# Test MongoDB data and downloaded mongod binaries (backend/test/helpers.js, vitest.config.js)
+backend/.test-tmp/
+backend/.mongodb-binaries/
