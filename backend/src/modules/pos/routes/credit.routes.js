@@ -11,29 +11,38 @@ const router = express.Router();
 // Plan Gating: Credit sales and installments require Starter plan or above (F-11 / SRS 2.3)
 router.use(protect, subscriptionGuard, requireFeature('credit'));
 
+const eligibility = (req, requestedCreditCents, managerPin) =>
+  creditService.checkCreditEligibility({
+    tenantId: req.auth.tenantId,
+    customerId: req.params.id,
+    requestedCreditCents,
+    managerPin,
+    userId: req.auth.userId,
+  });
+
 /**
- * GET /customers/:id/eligibility
- * Checks customer credit limit and exposure.
+ * GET /customers/:id/eligibility?requestedAmountCents=
+ * Checks customer credit limit and exposure. Never takes a PIN (URLs end up in logs).
  */
 router.get(
   '/customers/:id/eligibility',
   requirePermission('pos.view'),
   wrap(async (req, res) => {
     const requestedAmount = req.query.requestedAmountCents ? Number(req.query.requestedAmountCents) : 0;
-    const managerPin = req.query.pin || null;
+    res.json({ success: true, data: await eligibility(req, requestedAmount, null) });
+  })
+);
 
-    const data = await creditService.checkCreditEligibility({
-      tenantId: req.auth.tenantId,
-      customerId: req.params.id,
-      requestedCreditCents: requestedAmount,
-      managerPin,
-      userId: req.auth.userId,
-    });
-
-    res.json({
-      success: true,
-      data,
-    });
+/**
+ * POST /customers/:id/eligibility { pin, amountCents }
+ * Same check, with a manager approval PIN for going over the credit limit.
+ */
+router.post(
+  '/customers/:id/eligibility',
+  requirePermission('pos.view'),
+  wrap(async (req, res) => {
+    const pin = typeof req.body.pin === 'string' ? req.body.pin : null;
+    res.json({ success: true, data: await eligibility(req, Number(req.body.amountCents) || 0, pin) });
   })
 );
 

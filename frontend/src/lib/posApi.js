@@ -120,11 +120,13 @@ export const isNetworkError = (err) =>
 
 /**
  * Checks customer credit limit and exposure eligibility.
+ * With a manager PIN it POSTs instead, so the PIN never ends up in a URL.
  */
 export async function checkCreditEligibility(customerId, requestedAmountCents = 0, pin = null) {
-  let url = `/pos/credit/customers/${encodeURIComponent(customerId)}/eligibility?requestedAmountCents=${requestedAmountCents}`;
-  if (pin) url += `&pin=${encodeURIComponent(pin)}`;
-  const res = await authFetch(url);
+  const url = `/pos/credit/customers/${encodeURIComponent(customerId)}/eligibility`;
+  const res = pin
+    ? await authFetch(url, { method: 'POST', body: JSON.stringify({ pin, amountCents: requestedAmountCents }) })
+    : await authFetch(`${url}?requestedAmountCents=${requestedAmountCents}`);
   return res.data;
 }
 

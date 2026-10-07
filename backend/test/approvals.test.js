@@ -8,6 +8,8 @@ import request from 'supertest';
 import User from '../src/modules/users/User.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import { createApp } from '../src/app.js';
+import Customer from '../src/modules/customers/Customer.model.js';
+import Tenant from '../src/modules/tenants/Tenant.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -135,5 +137,34 @@ describe('Q25 shared approval-PIN service', () => {
     expect(ok.status).toBe(200);
     expect(ok.body.data.approverId).toBe(String(managerA.id));
     expect((await verify(cashierB.token, { pin: '2222' })).status).toBe(403);
+  });
+});
+
+describe('Q26 credit eligibility PIN is never read from the query string', () => {
+  it('GET ?pin= approves nothing; POST with a manager PIN in the body approves', async () => {
+    const shop = await setupShop('elig-pin@shop.lk', 'Eligibility PIN Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cash-elig@shop.lk');
+    await runAsPlatform(async () => Tenant.updateOne({ _id: shop.tenantId }, { planCode: 'starter' }));
+    const customer = await runWithContext({ tenantId: shop.tenantId }, async () =>
+      Customer.create({ name: 'Nimal Perera', phone: '0771234567', nic: '199012345678', creditLimitCents: 100000, currentBalanceCents: 0 })
+    );
+    const url = `/api/pos/credit/customers/${customer._id}/eligibility`;
+
+    const plain = await api('get', `${url}?requestedAmountCents=50000`, cashier.token);
+    expect(plain.status).toBe(200);
+    expect(plain.body.data.eligible).toBe(true);
+
+    const viaQuery = await api('get', `${url}?requestedAmountCents=150000&pin=9999`, cashier.token);
+    expect(viaQuery.status).toBe(400);
+    expect(viaQuery.body.code).toBe('V-07');
+
+    const wrong = await api('post', url, cashier.token).send({ pin: '0000', amountCents: 150000 });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.code).toBe('V-07');
+
+    const approved = await api('post', url, cashier.token).send({ pin: '9999', amountCents: 150000 });
+    expect(approved.status).toBe(200);
+    expect(approved.body.data.approvedBy).toBe(String(shop.userId));
+    expect(approved.body.data.overLimitByCents).toBe(50000);
   });
 });
