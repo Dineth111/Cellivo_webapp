@@ -21,3 +21,6 @@ yarn-error.log*
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Local dev MongoDB data (core/db.js replica set)
+backend/.mongodb_data/
