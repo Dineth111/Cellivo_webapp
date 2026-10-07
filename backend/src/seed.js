@@ -22,7 +22,9 @@ const staff = [
 ];
 const emailOf = (role) => `${role.replace('_', '')}@cellivo.lk`;
 
-await mongoose.connect(config.mongoUri);
+import connectDB from './core/db.js';
+
+await connectDB();
 
 // Demo users from before multi-tenancy have no tenantId/passwordHash and can never log in: remove them.
 const legacy = await User.collection.deleteMany({ email: /@cellivo.lk$/, tenantId: { $exists: false } });
@@ -47,3 +49,4 @@ if (await runAsPlatform(async () => await User.exists({ email: emailOf('owner') 
 
 console.log(`\nPassword for all: ${PASSWORD}`);
 await mongoose.disconnect();
+process.exit(0);
