@@ -68,6 +68,7 @@ export async function completeSale({
   branchId,
   userId,
   userRole,
+  discountLimitPercent = null,
   permissions = {},
   data = {},
   idempotencyKey = null,
@@ -145,8 +146,6 @@ export async function completeSale({
     const seenImeis = new Set();
     const priceChanges = [];
     let belowCost = false;
-    let requiresDiscountApproval = false;
-    let highestDiscountPercent = Number(invoiceDiscountPercent || 0);
 
     for (const raw of lines) {
       const qty = Number(raw.qty || 1);
@@ -199,12 +198,7 @@ export async function completeSale({
         }
       }
 
-      // Line discount check
       const lineDiscPercent = Number(raw.discountPercent || 0);
-      if (lineDiscPercent > highestDiscountPercent) {
-        highestDiscountPercent = lineDiscPercent;
-      }
-
       const calculatedLine = money.calculateLine({
         unitPriceCents,
         qty,
@@ -232,11 +226,27 @@ export async function completeSale({
       });
     }
 
-    // Role discount limit check
-    const userLimit = Number(userRole?.discountLimitPercent ?? userRole?.discountLimit ?? 0);
-    if (highestDiscountPercent > userLimit) {
-      requiresDiscountApproval = true;
-    }
+    // 4. Calculate invoice totals
+    const totals = calculateCartTotals({
+      lines: processedLines,
+      invoiceDiscountPercent,
+      invoiceDiscountAmountCents,
+      tradeInValueCents,
+      taxRatePercent,
+    });
+
+    // Discount limit: every discount (percent or amount) is judged by its effective percent.
+    // Compared in cents so a rounded percent discount is never flagged by half a cent.
+    const userLimit = Number(discountLimitPercent ?? userRole?.discountLimitPercent ?? 0);
+    const pct = (part, whole) => (whole > 0 ? Math.round((part * 10000) / whole) / 100 : 0);
+    const netBeforeInvoiceDiscount = totals.subtotalCents - totals.totalLineDiscountsCents;
+    const checks = [
+      ...processedLines.map((l) => [l.discountCents, l.grossCents, 0]),
+      [totals.invoiceDiscountCents, netBeforeInvoiceDiscount, 0],
+      [totals.totalDiscountCents, totals.subtotalCents, processedLines.length], // stacked; allow 1 cent rounding per line
+    ];
+    const highestDiscountPercent = Math.max(...checks.map(([part, whole]) => pct(part, whole)));
+    const requiresDiscountApproval = checks.some(([part, whole, slack]) => part > money.percentDiscount(whole, userLimit) + slack);
 
     const requiresPriceOverrideApproval = (priceChanges.length > 0 || belowCost) && !hasSpecial(userRole, 'override_price');
 
@@ -266,15 +276,6 @@ export async function completeSale({
     if (requiresDiscountApproval) {
       audits.push({ action: 'pos.discount_approved', before: { limit: userLimit }, after: { highestDiscountPercent, approvedBy } });
     }
-
-    // 4. Calculate invoice totals
-    const totals = calculateCartTotals({
-      lines: processedLines,
-      invoiceDiscountPercent,
-      invoiceDiscountAmountCents,
-      tradeInValueCents,
-      taxRatePercent,
-    });
 
     // Credit Limit & Exposure Validation (V-07)
     if (isCreditSale && customerId) {

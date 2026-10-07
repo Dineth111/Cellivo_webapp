@@ -465,4 +465,43 @@ describe('POS review fixes', () => {
     const logs = await auditOf(shop.tenantId, 'pos.price_override');
     expect(logs.some((l) => l.before?.lines?.[0]?.unitPriceCents === 5000 && l.after?.lines?.[0]?.unitPriceCents === 4500)).toBe(true);
   });
+
+  it('2. converts amount discounts to percent and enforces the role limit (V-06)', async () => {
+    const shop = await setupShop('disc-amount@shop.lk', 'Disc Amount Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-disc@shop.lk'); // 5% limit
+
+    // 20% as a line amount
+    const lineAmt = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ discountAmountCents: 1000 })],
+      payments: [{ method: 'cash', amountCents: 4000 }],
+    });
+    expect(lineAmt.status).toBe(400);
+    expect(lineAmt.body.code).toBe('V-06');
+
+    // 20% as an invoice amount
+    const invAmt = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine()],
+      invoiceDiscountAmountCents: 1000,
+      payments: [{ method: 'cash', amountCents: 4000 }],
+    });
+    expect(invAmt.status).toBe(400);
+    expect(invAmt.body.code).toBe('V-06');
+
+    // 4% line + 4% invoice stacks to ~7.8% of the subtotal -> over 5%
+    const stacked = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ discountPercent: 4 })],
+      invoiceDiscountPercent: 4,
+      payments: [{ method: 'cash', amountCents: 4608 }],
+    });
+    expect(stacked.status).toBe(400);
+    expect(stacked.body.code).toBe('V-06');
+
+    const approved = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ discountAmountCents: 1000 })],
+      managerPin: '9999',
+      payments: [{ method: 'cash', amountCents: 4000 }],
+    });
+    expect(approved.status).toBe(201);
+    expect((await auditOf(shop.tenantId, 'pos.discount_approved')).length).toBe(1);
+  });
 });

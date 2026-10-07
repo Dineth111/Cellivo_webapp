@@ -68,6 +68,7 @@ router.post(
       branchId,
       userId: req.auth.userId,
       userRole: req.auth.role,
+      discountLimitPercent: req.auth.discountLimit,
       permissions: req.auth.role?.grid,
       data: req.body,
       idempotencyKey,
