@@ -18,6 +18,11 @@ function cleanInput(b = {}) {
     if (!Number.isFinite(n) || n < 0 || n > 100) throw badRequest('Discount limit must be between 0 and 100');
     set.discountLimitPercent = n;
   }
+  if (b.tradeInLimitCents !== undefined) {
+    const n = b.tradeInLimitCents;
+    if (!Number.isSafeInteger(n) || n < 0) throw badRequest('Trade-in limit must be a whole number of cents, 0 or more');
+    set.tradeInLimitCents = n;
+  }
   return set;
 }
 

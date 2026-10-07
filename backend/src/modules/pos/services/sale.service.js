@@ -260,7 +260,7 @@ export async function completeSale({
 
     const requiresPriceOverrideApproval = (priceChanges.length > 0 || belowCost) && !hasSpecial(userRole, 'override_price');
 
-    // Trade-in limit: owner unlimited; others use role.tradeInLimitCents (not in the Role schema yet, so 0)
+    // Trade-in limit: owner unlimited; others use role.tradeInLimitCents
     const tradeInLimitCents = userRole?.key === 'owner' ? Infinity : money.round(userRole?.tradeInLimitCents ?? 0);
     const requiresTradeInApproval = totals.tradeInValueCents > tradeInLimitCents;
 
