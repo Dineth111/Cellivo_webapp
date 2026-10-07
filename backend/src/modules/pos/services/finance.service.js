@@ -208,7 +208,7 @@ export async function closeSession({
           'VARIANCE_REQUIRES_APPROVAL'
         );
       }
-      const pinVerify = await verifyApprovalPin(tid, managerPin);
+      const pinVerify = await verifyApprovalPin(tid, managerPin, userId);
       if (!pinVerify.approved) {
         throw forbidden('Invalid manager approval PIN for drawer variance', 'INVALID_MANAGER_PIN');
       }

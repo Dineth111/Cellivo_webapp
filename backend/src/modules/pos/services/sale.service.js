@@ -267,7 +267,7 @@ export async function completeSale({
     // Verify Manager Approval PIN if required
     let approvedBy = null;
     if (requiresPriceOverrideApproval || requiresDiscountApproval || requiresTradeInApproval) {
-      const pinVerify = await verifyApprovalPin(tid, managerPin);
+      const pinVerify = await verifyApprovalPin(tid, managerPin, userId);
       if (!pinVerify.approved) {
         if (requiresDiscountApproval) {
           throw new AppError(400, 'This discount is above your limit. Ask a manager to approve.', 'V-06');
@@ -314,7 +314,7 @@ export async function completeSale({
 
         if (exposure > limit) {
           const excess = exposure - limit;
-          const pinVerify = await verifyApprovalPin(tid, managerPin);
+          const pinVerify = await verifyApprovalPin(tid, managerPin, userId);
           if (!pinVerify.approved) {
             throw new AppError(
               400,

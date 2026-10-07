@@ -78,6 +78,7 @@ export async function checkCreditEligibility({
   customerId,
   requestedCreditCents = 0,
   managerPin = null,
+  userId = null,
 }) {
   if (!customerId) {
     throw badRequest('Credit sales and installments require a registered customer', 'CREDIT_REQUIRES_CUSTOMER');
@@ -98,7 +99,7 @@ export async function checkCreditEligibility({
       const excess = totalExposure - creditLimit;
 
       // Check manager approval PIN
-      const pinVerify = await verifyApprovalPin(tid, managerPin);
+      const pinVerify = await verifyApprovalPin(tid, managerPin, userId);
       if (!pinVerify.approved) {
         throw new AppError(
           400,

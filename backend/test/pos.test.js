@@ -8,6 +8,7 @@ import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
 import User from '../src/modules/users/User.model.js';
+import Role from '../src/modules/roles/Role.model.js';
 import { posEvents, cleanAllExpiredHeldCarts } from '../src/modules/pos/services/sale.service.js';
 import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
@@ -754,5 +755,38 @@ describe('POS review fixes', () => {
     expect((await search('.*')).body.data).toEqual([]);
     expect((await search('silicone')).body.data.length).toBe(1);
     expect((await search('x'.repeat(101))).status).toBe(400);
+  });
+
+  it('10d. approval PIN: only approvers count, no branch_manager bypass, failures audited and rate limited', async () => {
+    const shop = await setupShop('pin-rules@shop.lk', 'PIN Rules Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-pin@shop.lk');
+    const manager = await addStaff(shop, 'branch_manager', 'manager-pin@shop.lk');
+    const setPin = async (id, pin) => runAsPlatform(async () => User.updateOne({ _id: id }, { approvalPinHash: await bcrypt.hash(pin, 4) }));
+    await setPin(cashier.id, '1111');
+    await setPin(manager.id, '2222');
+    await runAsPlatform(async () => Role.updateOne({ tenantId: shop.tenantId, key: 'branch_manager' }, { 'special.approve_discount': false }));
+    const discounted = (pin) =>
+      api('post', '/api/pos/checkout', cashier.token).send({
+        lines: [caseLine({ discountPercent: 10 })],
+        managerPin: pin,
+        payments: [{ method: 'cash', amountCents: 4500 }],
+      });
+
+    // a non-approver's PIN, and a branch manager without approve_discount, do not approve
+    expect((await discounted('1111')).body.code).toBe('V-06');
+    expect((await discounted('2222')).body.code).toBe('V-06');
+    expect((await discounted('0000')).body.code).toBe('V-06');
+    expect((await discounted('0001')).body.code).toBe('V-06');
+    expect((await discounted('0002')).body.code).toBe('V-06');
+
+    // 5 failures -> locked, even with the right PIN
+    const locked = await discounted('9999');
+    expect(locked.status).toBe(429);
+    expect(locked.body.code).toBe('PIN_LOCKED');
+    expect((await auditOf(shop.tenantId, 'pos.approval_pin_failed')).length).toBe(5);
+
+    // the owner is a different user, so not locked
+    const owner = await api('post', '/api/pos/finance/drawer/open', shop.token).send({ openingFloatCents: 0 });
+    expect(owner.status).toBe(201);
   });
 });

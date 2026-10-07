@@ -34,3 +34,5 @@ Each item states the safe default that was implemented. Confirm or change.
 ## POS review fixes (Dev 3)
 
 24. **Trade-in limit per role.** POS reads `role.tradeInLimitCents` (owner: no limit), but the Role schema (Dev 1) has no such field, so every non-owner role is 0 and any trade-in needs a manager PIN. Add `tradeInLimitCents: { type: Number, default: 0, min: 0 }` to `Role.model.js` and the roles controller.
+25. **Approval PIN lockout is in memory.** POS counts wrong PINs per requesting user in the API process (5 in 15 min -> 429 `PIN_LOCKED`). It resets on restart and is not shared between instances. Dev 1's planned `POST /api/users/verify-pin` (item 11) should own a persistent counter.
+26. **PIN in a query string.** `GET /api/pos/credit/customers/:id/eligibility?pin=` puts the manager PIN in URLs (proxy and access logs). Suggest moving it to a POST body or header.

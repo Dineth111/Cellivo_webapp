@@ -27,6 +27,7 @@ router.get(
       customerId: req.params.id,
       requestedCreditCents: requestedAmount,
       managerPin,
+      userId: req.auth.userId,
     });
 
     res.json({
