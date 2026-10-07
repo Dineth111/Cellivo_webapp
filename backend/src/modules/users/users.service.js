@@ -118,15 +118,38 @@ const pinLocked = () => new AppError(429, 'Too many wrong approval PINs. Try aga
  * whose role is owner or has `special`. 5 wrong PINs in 15 minutes lock the requesting user for 15
  * minutes (stored on the user, so it survives restarts and is shared between instances).
  * Returns { approverId }, or null for a wrong or empty PIN. Throws 429 PIN_LOCKED while locked.
+ *
+ * Each attempt is reserved (counted) atomically BEFORE the bcrypt compare, so parallel requests can
+ * never get more than 5 compares in: once the count reaches 5 the lock is set in the same update.
  */
 export async function verifyApprovalPin({ tenantId, requestedBy, pin, special = 'approve_discount' }) {
   if (!SPECIALS.includes(special)) throw badRequest('Unknown approval permission');
   const { ip, device } = getContext() || {}; // runAsPlatform drops the request context; keep these for the audit
   return runAsPlatform(async () => {
     const now = new Date();
-    // ponytail: check-then-compare, so requests already in flight when the lock lands still get compared
-    if (await User.exists({ _id: requestedBy, tenantId, pinLockedUntil: { $gt: now } })) throw pinLocked();
-    if (!pin) return null;
+    const notLocked = { $or: [{ pinLockedUntil: null }, { pinLockedUntil: { $lte: now } }] };
+    if (!pin) {
+      // nothing to compare, so nothing to count; still report a lock
+      if (await User.exists({ _id: requestedBy, tenantId, pinLockedUntil: { $gt: now } })) throw pinLocked();
+      return null;
+    }
+
+    // Reserve the attempt: count it in the current window (or start a new one), lock when it reaches the limit.
+    const inWindow = { $gte: [{ $ifNull: ['$pinFailedSince', new Date(0)] }, new Date(now - PIN_WINDOW_MS)] };
+    const reserved = await User.findOneAndUpdate(
+      { _id: requestedBy, tenantId, ...notLocked },
+      [
+        {
+          $set: {
+            pinFailedAttempts: { $cond: [inWindow, { $add: [{ $ifNull: ['$pinFailedAttempts', 0] }, 1] }, 1] },
+            pinFailedSince: { $cond: [inWindow, '$pinFailedSince', now] },
+          },
+        },
+        { $set: { pinLockedUntil: { $cond: [{ $gte: ['$pinFailedAttempts', PIN_MAX_FAILURES] }, new Date(+now + PIN_WINDOW_MS), null] } } },
+      ],
+      { new: true, projection: { pinFailedAttempts: 1, pinLockedUntil: 1 } }
+    ).lean();
+    if (!reserved) throw pinLocked(); // locked (or not a user of this tenant): no compare
 
     const roles = await Role.find({ tenantId, $or: [{ key: 'owner' }, { [`special.${special}`]: true }] }).select('_id').lean();
     const approvers = await User.find({
@@ -142,25 +165,11 @@ export async function verifyApprovalPin({ tenantId, requestedBy, pin, special = 
       }
     }
 
-    // One atomic update: count the failure in the current window (or start a new one), lock at the limit.
-    const inWindow = { $gte: [{ $ifNull: ['$pinFailedSince', new Date(0)] }, new Date(now - PIN_WINDOW_MS)] };
-    const user = await User.findOneAndUpdate(
-      { _id: requestedBy, tenantId },
-      [
-        {
-          $set: {
-            pinFailedAttempts: { $cond: [inWindow, { $add: [{ $ifNull: ['$pinFailedAttempts', 0] }, 1] }, 1] },
-            pinFailedSince: { $cond: [inWindow, '$pinFailedSince', now] },
-          },
-        },
-        { $set: { pinLockedUntil: { $cond: [{ $gte: ['$pinFailedAttempts', PIN_MAX_FAILURES] }, new Date(+now + PIN_WINDOW_MS), '$pinLockedUntil'] } } },
-      ],
-      { new: true, projection: { pinFailedAttempts: 1, pinLockedUntil: 1 } }
-    ).lean();
-    const attempts = user?.pinFailedAttempts ?? 0;
+    // Wrong PIN: the attempt is already counted (and the lock set, if this was the 5th).
+    const attempts = reserved.pinFailedAttempts;
     const auditBase = { entity: 'User', entityId: requestedBy, tenantId, userId: requestedBy, ip, device };
     await audit.record({ ...auditBase, action: 'pin.verify_failed', after: { special, failuresInWindow: attempts } });
-    if (attempts === PIN_MAX_FAILURES) await audit.record({ ...auditBase, action: 'pin.locked', after: { lockedUntil: user.pinLockedUntil } });
+    if (reserved.pinLockedUntil) await audit.record({ ...auditBase, action: 'pin.locked', after: { lockedUntil: reserved.pinLockedUntil } });
     return null;
   });
 }
