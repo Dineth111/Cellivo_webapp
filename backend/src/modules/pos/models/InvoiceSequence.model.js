@@ -27,7 +27,7 @@ invoiceSequenceSchema.statics.getNextNumber = async function (tenantId, branchId
       $inc: { seq: 1 },
       $setOnInsert: { tenantId: tid, branchId: bid, prefix },
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, new: true, setDefaultsOnInsert: true, session }
   );
 
   const padded = String(doc.seq).padStart(6, '0');

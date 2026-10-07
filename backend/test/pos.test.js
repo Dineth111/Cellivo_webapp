@@ -368,7 +368,7 @@ describe('POS Sale Backend (F-09) Engine', () => {
     });
     expect(quoteRes.status).toBe(201);
     const quoteId = quoteRes.body.data._id;
-    expect(quoteRes.body.data.quoteNumber).toMatch(/^QTE-\d+$/);
+    expect(quoteRes.body.data.quoteNumber).toMatch(/^QTE-INV-\d+$/);
 
     // Convert quotation
     const convertRes = await api('post', `/api/pos/quotations/${quoteId}/convert`, shop.token).send({
@@ -564,5 +564,30 @@ describe('POS review fixes', () => {
     // a branch of another tenant does not exist here, even for the owner
     const foreign = await api('get', '/api/pos/cart/held', shop.token).set('x-branch-id', String(other.branchId));
     expect(foreign.status).toBe(404);
+  });
+
+  it('5. numbers invoices per branch prefix without clashes', async () => {
+    const shop = await setupShop('branch-numbers@shop.lk', 'Branch Numbers Shop');
+    const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'COL-' });
+    await runWithContext({ tenantId: shop.tenantId }, async () =>
+      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 10 })
+    );
+    const sell = (branchId) =>
+      api('post', '/api/pos/checkout', shop.token)
+        .set('x-branch-id', String(branchId))
+        .send({ lines: [caseLine()], payments: [{ method: 'cash', amountCents: 5000 }] });
+
+    const [a, b] = await Promise.all([sell(shop.branchId), sell(branchB._id)]);
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    expect(a.body.data.invoiceNumber).toBe('INV-000001');
+    expect(b.body.data.invoiceNumber).toBe('COL-000001');
+
+    const parallel = await Promise.all(Array.from({ length: 4 }, () => sell(branchB._id)));
+    for (const r of parallel) expect(r.status).toBe(201);
+    expect(new Set(parallel.map((r) => r.body.data.invoiceNumber)).size).toBe(4);
+
+    const quote = await api('post', '/api/pos/quotations', shop.token).set('x-branch-id', String(branchB._id)).send({ lines: [caseLine()] });
+    expect(quote.body.data.quoteNumber).toBe('QTE-COL-000001');
   });
 });

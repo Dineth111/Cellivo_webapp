@@ -355,6 +355,10 @@ export async function completeSale({
       paymentStatus = cashOrCollectedPaidCents === 0 ? 'unpaid' : cashOrCollectedPaidCents >= totals.grandTotalCents ? 'paid' : 'partially_paid';
     }
 
+    // Invoice numbers use the branch prefix so branches never clash within a tenant
+    const branchDoc = bid ? await Branch.findById(bid).select('invoicePrefix').lean() : null;
+    const invoicePrefix = branchDoc?.invoicePrefix || 'INV-';
+
     // 6. Execute atomic transaction (with retry for write conflicts under high parallel concurrency)
     let createdInvoice;
     let savedPayments = [];
@@ -366,8 +370,8 @@ export async function completeSale({
       session.startTransaction();
 
       try {
-        // Atomic sequential invoice number
-        const invoiceNumber = await InvoiceSequence.getNextNumber(tid, bid, 'INV-');
+        // Atomic sequential invoice number, taken inside the transaction (rolled back with it)
+        const invoiceNumber = await InvoiceSequence.getNextNumber(tid, bid, invoicePrefix, session);
 
         // Deduct stock for all lines
         for (const line of processedLines) {
@@ -783,7 +787,8 @@ export async function createQuotation({
       if (cust) customerSnapshot = { name: cust.name, phone: cust.phone, email: cust.email };
     }
 
-    const quoteNumber = await InvoiceSequence.getNextNumber(tid, branchId, 'QTE-');
+    const branchDoc = branchId ? await Branch.findById(branchId).select('invoicePrefix').lean() : null;
+    const quoteNumber = await InvoiceSequence.getNextNumber(tid, branchId, `QTE-${branchDoc?.invoicePrefix || 'INV-'}`);
     const totals = calculateCartTotals({ lines, invoiceDiscountPercent, taxRatePercent });
 
     const quote = new Quotation({
