@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { startDb, stopDb, resetDb } from './helpers.js';
-import { api, signup, addStaff } from './api.js';
+import { api, signup, addStaff, addBranch } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
 import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
@@ -536,5 +536,33 @@ describe('POS review fixes', () => {
     // non-phone devices need no IMEI
     const accessory = await sale(shop.token, { tradeIn: { modelName: 'AirPods', category: 'accessory' } });
     expect(accessory.status).toBe(201);
+  });
+
+  it('4. checks branch access on every POS route', async () => {
+    const shop = await setupShop('branch-access@shop.lk', 'Branch Access Shop');
+    const other = await setupShop('branch-other@shop.lk', 'Other Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-branch@shop.lk');
+    const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'B2' });
+    const asB = (method, url, token) => api(method, url, token).set('x-branch-id', String(branchB._id));
+
+    const blocked = [
+      asB('post', '/api/pos/checkout', cashier.token).send({ lines: [caseLine()], payments: [{ method: 'cash', amountCents: 5000 }] }),
+      asB('get', '/api/pos/cart/held', cashier.token),
+      asB('get', '/api/pos/items/lookup?q=case', cashier.token),
+      asB('get', '/api/pos/finance/drawer/current', cashier.token),
+      asB('post', '/api/pos/returns', cashier.token).send({}),
+      api('get', `/api/pos/cart/held?branchId=${branchB._id}`, cashier.token),
+    ];
+    for (const res of await Promise.all(blocked)) expect(res.status).toBe(403);
+
+    // own branch still works
+    expect((await api('get', '/api/pos/cart/held', cashier.token)).status).toBe(200);
+
+    // owner has view_all_branches
+    expect((await asB('get', '/api/pos/cart/held', shop.token)).status).toBe(200);
+
+    // a branch of another tenant does not exist here, even for the owner
+    const foreign = await api('get', '/api/pos/cart/held', shop.token).set('x-branch-id', String(other.branchId));
+    expect(foreign.status).toBe(404);
   });
 });

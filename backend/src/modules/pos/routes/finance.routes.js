@@ -8,6 +8,7 @@ import Expense from '../models/Expense.model.js';
 import CashSession from '../models/CashSession.model.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound } from '../../../core/errors.js';
+import { resolveBranch, resolveRecordBranch } from '../utils/branch.js';
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.use(subscriptionGuard);
 router.post('/drawer/open', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.headers['x-branch-id'] || req.body.branchId || req.auth.branchIds?.[0] || req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const userId = req.user._id;
     const { openingFloatCents, terminalId } = req.body;
 
@@ -44,7 +45,7 @@ router.post('/drawer/open', async (req, res, next) => {
 router.get('/drawer/current', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.headers['x-branch-id'] || req.query.branchId || req.auth.branchIds?.[0] || req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const userId = req.user._id;
 
     const session = await financeService.getCurrentSession({
@@ -65,6 +66,7 @@ router.post('/drawer/movement', async (req, res, next) => {
     const tenantId = req.user.tenantId;
     const userId = req.user._id;
     const { sessionId, type, amountCents, reason } = req.body;
+    await resolveRecordBranch(req, CashSession, sessionId, 'Cash session');
 
     const session = await financeService.recordCashMovement({
       tenantId,
@@ -87,6 +89,7 @@ router.post('/drawer/close', async (req, res, next) => {
     const tenantId = req.user.tenantId;
     const userId = req.user._id;
     const { sessionId, countedCashCents, denominations, managerPin } = req.body;
+    await resolveRecordBranch(req, CashSession, sessionId, 'Cash session');
 
     const session = await financeService.closeSession({
       tenantId,
@@ -108,6 +111,7 @@ router.get('/drawer/z-report/:sessionId', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
     const { sessionId } = req.params;
+    await resolveRecordBranch(req, CashSession, sessionId, 'Cash session');
 
     const session = await runWithContext({ tenantId }, async () => {
       return await CashSession.findOne({ _id: sessionId, tenantId });
@@ -143,7 +147,7 @@ router.get('/banking/accounts', async (req, res, next) => {
 router.post('/banking/accounts', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const { accountName, bankName, accountNumber, balanceCents } = req.body;
 
     if (!accountName || !bankName || !accountNumber) {
@@ -172,7 +176,7 @@ router.post('/banking/accounts', async (req, res, next) => {
 router.post('/banking/deposit', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const userId = req.user._id;
     const { sessionId, bankAccountId, amountCents } = req.body;
 
@@ -218,7 +222,7 @@ router.get('/cheques', async (req, res, next) => {
 router.post('/cheques', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const userId = req.user._id;
 
     const cheque = await financeService.recordCheque({
@@ -241,6 +245,7 @@ router.patch('/cheques/:id/status', async (req, res, next) => {
     const userId = req.user._id;
     const { id } = req.params;
     const { status, reason } = req.body;
+    await resolveRecordBranch(req, Cheque, id, 'Cheque');
 
     const updated = await financeService.updateChequeStatus({
       tenantId,
@@ -287,7 +292,7 @@ router.get('/expenses', async (req, res, next) => {
 router.post('/expenses', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.user.branchId || null;
+    const branchId = (await resolveBranch(req))._id;
     const userId = req.user._id;
 
     const exp = await financeService.recordExpense({
@@ -311,7 +316,7 @@ router.post('/expenses', async (req, res, next) => {
 router.get('/day-end', async (req, res, next) => {
   try {
     const tenantId = req.user.tenantId;
-    const branchId = req.user.branchId || req.query.branchId || null;
+    const branchId = (await resolveBranch(req, { allowAll: true }))?._id ?? null;
     const date = req.query.date ? new Date(req.query.date) : new Date();
 
     const report = await financeService.getDayEndReport({

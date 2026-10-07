@@ -3,6 +3,7 @@ import { protect } from '../../../core/auth.js';
 import { subscriptionGuard, requireFeature } from '../../plans/planLimits.js';
 import { requirePermission } from '../../../core/permissions.js';
 import { wrap } from '../../../core/errors.js';
+import { resolveBranch } from '../utils/branch.js';
 import * as creditService from '../services/credit.service.js';
 
 const router = express.Router();
@@ -63,7 +64,7 @@ router.post(
   '/payments',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
 
     const result = await creditService.recordCustomerPayment({
       tenantId: req.auth.tenantId,
@@ -91,7 +92,7 @@ router.get(
   '/overdue',
   requirePermission('pos.view'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.query.branchId || null;
+    const branchId = (await resolveBranch(req, { allowAll: true }))?._id ?? null;
 
     const list = await creditService.getOverdueInstallments({
       tenantId: req.auth.tenantId,

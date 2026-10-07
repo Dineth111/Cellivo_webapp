@@ -2,6 +2,7 @@ import express from 'express';
 import { protect } from '../../../core/auth.js';
 import { subscriptionGuard } from '../../plans/planLimits.js';
 import { wrap, badRequest } from '../../../core/errors.js';
+import { resolveBranch } from '../utils/branch.js';
 import * as ledgerService from '../services/ledger.service.js';
 
 const router = express.Router();
@@ -16,7 +17,7 @@ router.use(protect, subscriptionGuard);
 router.post(
   '/journal',
   wrap(async (req, res) => {
-    const { branchId, referenceType, referenceId, description, lines } = req.body;
+    const { referenceType, referenceId, description, lines } = req.body;
     if (!referenceType) {
       throw badRequest('referenceType is required', 'MISSING_FIELD');
     }
@@ -26,7 +27,7 @@ router.post(
 
     const entry = await ledgerService.postJournal({
       tenantId: req.auth.tenantId,
-      branchId: branchId || req.auth.branchIds?.[0] || null,
+      branchId: (await resolveBranch(req))._id,
       referenceType,
       referenceId,
       description,
@@ -49,7 +50,7 @@ router.post(
 router.get(
   '/balances',
   wrap(async (req, res) => {
-    const branchId = req.query.branchId || null;
+    const branchId = (await resolveBranch(req, { allowAll: true }))?._id ?? null;
     const balances = await ledgerService.getAccountBalances(req.auth.tenantId, branchId);
 
     res.json({

@@ -3,6 +3,7 @@ import { protect } from '../../../core/auth.js';
 import { subscriptionGuard, requireFeature } from '../../plans/planLimits.js';
 import { requirePermission } from '../../../core/permissions.js';
 import { wrap } from '../../../core/errors.js';
+import { resolveBranch } from '../utils/branch.js';
 import * as returnService from '../services/return.service.js';
 
 const router = express.Router();
@@ -38,7 +39,7 @@ router.post(
   '/',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
 
     const creditNote = await returnService.processReturn({
       tenantId: req.auth.tenantId,
@@ -65,7 +66,7 @@ router.post(
   '/exchange',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
 
     const result = await returnService.processExchange({
       tenantId: req.auth.tenantId,

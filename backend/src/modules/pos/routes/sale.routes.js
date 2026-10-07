@@ -6,6 +6,9 @@ import { wrap, badRequest } from '../../../core/errors.js';
 import * as saleService from '../services/sale.service.js';
 import * as stockAdapter from '../adapters/stock.adapter.js';
 import HeldCart from '../models/HeldCart.model.js';
+import Invoice from '../models/Invoice.model.js';
+import Quotation from '../models/Quotation.model.js';
+import { resolveBranch, resolveRecordBranch } from '../utils/branch.js';
 
 const router = express.Router();
 
@@ -19,7 +22,7 @@ router.get(
   '/items/lookup',
   wrap(async (req, res) => {
     const { barcode, imei, q } = req.query;
-    const branchId = req.headers['x-branch-id'] || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
 
     if (imei) {
       const item = await stockAdapter.lookupImei(req.auth.tenantId, branchId, String(imei).trim());
@@ -61,7 +64,7 @@ router.post(
   requirePermission('pos.create'),
   wrap(async (req, res) => {
     const idempotencyKey = req.headers['idempotency-key'] || req.body?.idempotencyKey || null;
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
 
     const invoice = await saleService.completeSale({
       tenantId: req.auth.tenantId,
@@ -90,7 +93,7 @@ router.post(
   '/cart/hold',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
     const { cartName, customer, lines, discounts } = req.body;
 
     const held = await saleService.holdCart({
@@ -119,9 +122,9 @@ router.get(
   '/cart/held',
   requirePermission('pos.view'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.query.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
     const query = { expiresAt: { $gt: new Date() } };
-    if (branchId) query.branchId = branchId;
+    query.branchId = branchId;
 
     const carts = await HeldCart.find(query).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data: carts });
@@ -136,7 +139,7 @@ router.post(
   '/cart/resume/:id',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.auth.branchIds?.[0];
+    const branchId = (await resolveRecordBranch(req, HeldCart, req.params.id, 'Held cart'))._id;
     const cart = await saleService.resumeCart({
       tenantId: req.auth.tenantId,
       branchId,
@@ -155,6 +158,7 @@ router.get(
   '/invoices/:id',
   requirePermission('pos.view'),
   wrap(async (req, res) => {
+    (await resolveRecordBranch(req, Invoice, req.params.id, 'Invoice'))._id;
     const invoice = await saleService.getInvoiceById({
       tenantId: req.auth.tenantId,
       invoiceId: req.params.id,
@@ -177,7 +181,7 @@ router.post(
   requireSpecial('void_invoice'),
   wrap(async (req, res) => {
     const { reason } = req.body;
-    const branchId = req.headers['x-branch-id'] || req.auth.branchIds?.[0];
+    const branchId = (await resolveRecordBranch(req, Invoice, req.params.id, 'Invoice'))._id;
 
     const voided = await saleService.voidInvoice({
       tenantId: req.auth.tenantId,
@@ -204,7 +208,7 @@ router.post(
   '/quotations',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.body?.branchId || req.auth.branchIds?.[0];
+    const branchId = (await resolveBranch(req))._id;
     const { customerId, lines, invoiceDiscountPercent, taxRatePercent, validDays } = req.body;
 
     const quote = await saleService.createQuotation({
@@ -234,7 +238,7 @@ router.post(
   '/quotations/:id/convert',
   requirePermission('pos.create'),
   wrap(async (req, res) => {
-    const branchId = req.headers['x-branch-id'] || req.auth.branchIds?.[0];
+    const branchId = (await resolveRecordBranch(req, Quotation, req.params.id, 'Quotation'))._id;
     const { payments } = req.body;
 
     const invoice = await saleService.convertQuotationToInvoice({
