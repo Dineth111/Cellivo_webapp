@@ -23,6 +23,7 @@ router.get(
       tenantId: req.auth.tenantId,
       invoiceNumber: req.params.invoiceNumber,
     });
+    await resolveBranch(req, { branchId: data.branchId });
 
     res.json({
       success: true,

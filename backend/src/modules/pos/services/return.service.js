@@ -83,6 +83,7 @@ export async function getInvoiceForReturn({ tenantId, invoiceNumber, returnWindo
     return {
       invoiceId: invoice._id,
       invoiceNumber: invoice.invoiceNumber,
+      branchId: invoice.branchId,
       createdAt: invoice.createdAt,
       status: invoice.status,
       customerSnapshot: invoice.customerSnapshot,
@@ -135,6 +136,9 @@ export async function processReturn({
   return await runWithContext({ tenantId: tid }, async () => {
     const invoice = await Invoice.findById(invoiceId);
     if (!invoice) throw notFound('Original invoice not found');
+    if (!hasSpecial(userRole, 'view_all_branches') && String(invoice.branchId) !== String(bid)) {
+      throw forbidden('This invoice belongs to another branch', 'BRANCH_FORBIDDEN');
+    }
 
     if (['voided', 'returned'].includes(invoice.status)) {
       throw badRequest(`Invoice is already ${invoice.status}`, 'INVOICE_ALREADY_CLOSED');
