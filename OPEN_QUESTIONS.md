@@ -14,7 +14,7 @@ Each item states the safe default that was implemented. Confirm or change.
 8. **Custom roles are a Starter+ feature** (FRS F-04). Not enforced; needs Dev 2's plan-limit service (TODO in roles controller).
 9. **Currency by country.** New tenants get LKR and Asia/Colombo regardless of country.
 10. **Tenant idle timeout** (10 to 240 min) is stored on Tenant but there is no settings endpoint yet (F-19 settings screen).
-11. **Approval PIN** is stored (bcrypt) but there is no verify endpoint yet; Dev 3 needs one for POS-04. Suggest `POST /api/users/verify-pin` returning the approver's id, rate limited.
+11. ~~**Approval PIN** verify endpoint.~~ **Resolved:** `POST /api/users/verify-pin` built with item 25.
 
 ## Security / technical
 
@@ -33,6 +33,12 @@ Each item states the safe default that was implemented. Confirm or change.
 
 ## POS review fixes (Dev 3)
 
-24. **Trade-in limit per role.** POS reads `role.tradeInLimitCents` (owner: no limit), but the Role schema (Dev 1) has no such field, so every non-owner role is 0 and any trade-in needs a manager PIN. Add `tradeInLimitCents: { type: Number, default: 0, min: 0 }` to `Role.model.js` and the roles controller.
-25. **Approval PIN lockout is in memory.** POS counts wrong PINs per requesting user in the API process (5 in 15 min -> 429 `PIN_LOCKED`). It resets on restart and is not shared between instances. Dev 1's planned `POST /api/users/verify-pin` (item 11) should own a persistent counter.
-26. **PIN in a query string.** `GET /api/pos/credit/customers/:id/eligibility?pin=` puts the manager PIN in URLs (proxy and access logs). Suggest moving it to a POST body or header.
+24. ~~**Trade-in limit per role.**~~ **Resolved:** `Role.tradeInLimitCents` added, editable in the roles API (whole cents, 0 or more). **Assumption:** default roles get branch manager Rs 50,000 (5,000,000 cents), every other role 0; the owner has no limit.
+25. ~~**Approval PIN lockout is in memory.**~~ **Resolved:** `users.service verifyApprovalPin` + `POST /api/users/verify-pin`; the lockout (5 wrong PINs in 15 min -> locked 15 min, 429 `PIN_LOCKED`) is stored on the requesting user and audited (`pin.verify_failed`, `pin.locked`). The POS adapter calls it.
+26. ~~**PIN in a query string.**~~ **Resolved:** the GET eligibility check ignores any PIN; the PIN-checked variant is `POST /api/pos/credit/customers/:id/eligibility { pin, amountCents }`. Frontend `posApi.js` updated.
+27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
+28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
+
+## Go-live checklist
+
+- Before importing any real shop data, confirm every role has tradeInLimitCents set.
