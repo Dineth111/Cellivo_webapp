@@ -130,151 +130,65 @@ export async function postJournal({
   });
 }
 
-/**
- * Posts a cash sale to the ledger.
- */
-export async function postCashSale({
-  tenantId,
-  branchId,
-  saleId,
-  amountCents,
-  taxCents = 0,
-  costCents = 0,
-  createdBy = null,
-  session = null,
-}) {
-  const salesRev = subtract(amountCents, taxCents);
-  const lines = [
-    { accountCode: '1010', debit: round(amountCents), credit: 0, description: `Cash received for sale ${saleId}` },
-    { accountCode: '4010', debit: 0, credit: salesRev, description: `Sales revenue for sale ${saleId}` },
-  ];
+/** One map from payment method to ledger account, used for every posting. */
+export const PAYMENT_ACCOUNTS = {
+  cash: '1010',
+  card: '1020',
+  bank_transfer: '1030',
+  bank: '1030',
+  cheque: '1030', // ponytail: no cheques-in-hand account in the chart; add one if cheques must clear before reaching Bank
+  credit: '1040',
+  store_credit: '2020',
+  loyalty_points: '2030',
+};
 
-  if (taxCents > 0) {
-    lines.push({ accountCode: '2010', debit: 0, credit: round(taxCents), description: `Tax payable for sale ${saleId}` });
-  }
-
-  if (costCents > 0) {
-    lines.push(
-      { accountCode: '5010', debit: round(costCents), credit: 0, description: `COGS for sale ${saleId}` },
-      { accountCode: '1050', debit: 0, credit: round(costCents), description: `Inventory reduction for sale ${saleId}` }
-    );
-  }
-
-  return await postJournal({
-    tenantId,
-    branchId,
-    referenceType: 'sale',
-    referenceId: saleId,
-    description: `Cash sale ${saleId}`,
-    lines,
-    createdBy,
-    session,
-  });
+export function accountForMethod(method) {
+  const code = PAYMENT_ACCOUNTS[method];
+  if (!code) throw badRequest(`Unknown payment method: ${method}`, 'INVALID_PAYMENT_METHOD');
+  return code;
 }
 
 /**
- * Posts a card sale to the ledger.
+ * Posts any POS sale. Debits come from the actual payments (cash net of change), the unpaid
+ * receivable and the trade-in device; credits are revenue and tax; plus COGS / inventory.
+ * postJournal rejects it if payments + receivable do not cover the total.
  */
-export async function postCardSale({
+export async function postSale({
   tenantId,
   branchId,
   saleId,
-  amountCents,
-  taxCents = 0,
-  costCents = 0,
-  createdBy = null,
-  session = null,
-}) {
-  const salesRev = subtract(amountCents, taxCents);
-  const lines = [
-    { accountCode: '1020', debit: round(amountCents), credit: 0, description: `Card clearing for sale ${saleId}` },
-    { accountCode: '4010', debit: 0, credit: salesRev, description: `Sales revenue for sale ${saleId}` },
-  ];
-
-  if (taxCents > 0) {
-    lines.push({ accountCode: '2010', debit: 0, credit: round(taxCents), description: `Tax payable for sale ${saleId}` });
-  }
-
-  if (costCents > 0) {
-    lines.push(
-      { accountCode: '5010', debit: round(costCents), credit: 0, description: `COGS for sale ${saleId}` },
-      { accountCode: '1050', debit: 0, credit: round(costCents), description: `Inventory reduction for sale ${saleId}` }
-    );
-  }
-
-  return await postJournal({
-    tenantId,
-    branchId,
-    referenceType: 'sale',
-    referenceId: saleId,
-    description: `Card sale ${saleId}`,
-    lines,
-    createdBy,
-    session,
-  });
-}
-
-/**
- * Posts a split-payment sale to the ledger.
- * @param payments Array of { method: 'cash'|'card'|'bank'|'store_credit'|'credit', amountCents: number }
- */
-export async function postSplitPayment({
-  tenantId,
-  branchId,
-  saleId,
-  payments = [],
   totalCents,
+  payments = [],
+  changeDueCents = 0,
+  receivableCents = 0,
+  tradeInValueCents = 0,
   taxCents = 0,
   costCents = 0,
+  referenceType = 'sale',
   createdBy = null,
   session = null,
 }) {
-  const methodAccounts = {
-    cash: '1010',
-    card: '1020',
-    bank: '1030',
-    credit: '1040',
-    store_credit: '2020',
-    loyalty_points: '2030',
-  };
-
   const lines = [];
-  let sumPaid = 0;
-
+  let changeLeft = round(changeDueCents);
   for (const p of payments) {
-    const amt = round(p.amountCents);
-    if (amt <= 0) continue;
-    sumPaid = add(sumPaid, amt);
-    const code = methodAccounts[p.method] || '1010';
-    lines.push({
-      accountCode: code,
-      debit: amt,
-      credit: 0,
-      description: `Payment via ${p.method} for sale ${saleId}`,
-    });
+    let amt = round(p.amountCents);
+    if (p.method === 'cash' && changeLeft > 0) {
+      const used = Math.min(amt, changeLeft); // change is paid out of cash tendered
+      amt -= used;
+      changeLeft -= used;
+    }
+    if (amt > 0) lines.push({ accountCode: accountForMethod(p.method), debit: amt, credit: 0, description: `Payment via ${p.method} for sale ${saleId}` });
   }
-
-  if (sumPaid !== round(totalCents)) {
-    throw badRequest(`Payment total (${sumPaid}) does not match sale total (${totalCents})`, 'PAYMENT_MISMATCH');
+  if (receivableCents > 0) {
+    lines.push({ accountCode: '1040', debit: round(receivableCents), credit: 0, description: `Accounts receivable for sale ${saleId}` });
   }
-
-  const salesRev = subtract(totalCents, taxCents);
-  lines.push({
-    accountCode: '4010',
-    debit: 0,
-    credit: salesRev,
-    description: `Sales revenue for sale ${saleId}`,
-  });
-
+  if (tradeInValueCents > 0) {
+    lines.push({ accountCode: '1050', debit: round(tradeInValueCents), credit: 0, description: `Trade-in device acquired for sale ${saleId}` });
+  }
+  lines.push({ accountCode: '4010', debit: 0, credit: subtract(add(totalCents, tradeInValueCents), taxCents), description: `Sales revenue for sale ${saleId}` });
   if (taxCents > 0) {
-    lines.push({
-      accountCode: '2010',
-      debit: 0,
-      credit: round(taxCents),
-      description: `Tax payable for sale ${saleId}`,
-    });
+    lines.push({ accountCode: '2010', debit: 0, credit: round(taxCents), description: `Tax payable for sale ${saleId}` });
   }
-
   if (costCents > 0) {
     lines.push(
       { accountCode: '5010', debit: round(costCents), credit: 0, description: `COGS for sale ${saleId}` },
@@ -282,90 +196,36 @@ export async function postSplitPayment({
     );
   }
 
-  return await postJournal({
-    tenantId,
-    branchId,
-    referenceType: 'sale',
-    referenceId: saleId,
-    description: `Split payment sale ${saleId}`,
-    lines,
-    createdBy,
-    session,
-  });
+  return await postJournal({ tenantId, branchId, referenceType, referenceId: saleId, description: `Sale ${saleId}`, lines, createdBy, session });
 }
 
-/**
- * Posts a credit sale (invoice to customer on credit).
- */
-export async function postCreditSale({
-  tenantId,
-  branchId,
-  saleId,
-  amountCents,
-  paidAmountCents = 0,
-  paymentMethod = 'cash',
-  taxCents = 0,
-  costCents = 0,
-  createdBy = null,
-  session = null,
-}) {
-  const receivableCents = subtract(amountCents, paidAmountCents);
-  const salesRev = subtract(amountCents, taxCents);
-  const lines = [];
+// Thin wrappers kept for existing callers; all go through postSale.
+export const postCashSale = ({ amountCents, ...rest }) =>
+  postSale({ ...rest, totalCents: amountCents, payments: [{ method: 'cash', amountCents }] });
 
-  if (receivableCents > 0) {
-    lines.push({
-      accountCode: '1040',
-      debit: receivableCents,
-      credit: 0,
-      description: `Accounts receivable for credit sale ${saleId}`,
-    });
-  }
+export const postCardSale = ({ amountCents, ...rest }) =>
+  postSale({ ...rest, totalCents: amountCents, payments: [{ method: 'card', amountCents }] });
 
-  if (paidAmountCents > 0) {
-    const acc = paymentMethod === 'card' ? '1020' : '1010';
-    lines.push({
-      accountCode: acc,
-      debit: round(paidAmountCents),
-      credit: 0,
-      description: `Down payment via ${paymentMethod} for credit sale ${saleId}`,
-    });
-  }
+export const postSplitPayment = postSale;
 
-  lines.push({
-    accountCode: '4010',
-    debit: 0,
-    credit: salesRev,
-    description: `Sales revenue for credit sale ${saleId}`,
-  });
-
-  if (taxCents > 0) {
-    lines.push({
-      accountCode: '2010',
-      debit: 0,
-      credit: round(taxCents),
-      description: `Tax payable for credit sale ${saleId}`,
-    });
-  }
-
-  if (costCents > 0) {
-    lines.push(
-      { accountCode: '5010', debit: round(costCents), credit: 0, description: `COGS for credit sale ${saleId}` },
-      { accountCode: '1050', debit: 0, credit: round(costCents), description: `Inventory reduction for credit sale ${saleId}` }
-    );
-  }
-
-  return await postJournal({
-    tenantId,
-    branchId,
+export const postCreditSale = ({ amountCents, paidAmountCents = 0, paymentMethod = 'cash', ...rest }) =>
+  postSale({
+    ...rest,
     referenceType: 'credit_sale',
-    referenceId: saleId,
-    description: `Credit sale ${saleId}`,
-    lines,
-    createdBy,
-    session,
+    totalCents: amountCents,
+    payments: paidAmountCents > 0 ? [{ method: paymentMethod, amountCents: paidAmountCents }] : [],
+    receivableCents: subtract(amountCents, paidAmountCents),
   });
-}
+
+export const postTradeIn = ({ tradeInValueCents, saleAmountCents, cashPaidCents, ...rest }) =>
+  postSale({
+    ...rest,
+    referenceType: 'trade_in',
+    totalCents: subtract(saleAmountCents, tradeInValueCents),
+    tradeInValueCents,
+    payments: [{ method: 'cash', amountCents: cashPaidCents }],
+  });
+
 
 /**
  * Posts an installment/credit settlement payment from a customer.
@@ -379,7 +239,7 @@ export async function postInstallmentPayment({
   createdBy = null,
   session = null,
 }) {
-  const methodAcc = paymentMethod === 'card' ? '1020' : paymentMethod === 'bank' ? '1030' : '1010';
+  const methodAcc = accountForMethod(paymentMethod);
   const lines = [
     { accountCode: methodAcc, debit: round(amountCents), credit: 0, description: `Installment collection via ${paymentMethod}` },
     { accountCode: '1040', debit: 0, credit: round(amountCents), description: `Receivable cleared for installment payment ${paymentId}` },
@@ -410,7 +270,7 @@ export async function postRefund({
   createdBy = null,
   session = null,
 }) {
-  const payoutAcc = paymentMethod === 'card' ? '1020' : paymentMethod === 'store_credit' ? '2020' : '1010';
+  const payoutAcc = accountForMethod(paymentMethod);
   const lines = [
     { accountCode: '4030', debit: round(amountCents), credit: 0, description: `Sales returns for refund ${refundId}` },
     { accountCode: payoutAcc, debit: 0, credit: round(amountCents), description: `Refund payout via ${paymentMethod}` },
@@ -458,67 +318,6 @@ export async function postStoreCredit({
     referenceType: 'payment',
     referenceId: customerId,
     description: `Store credit: ${reason}`,
-    lines,
-    createdBy,
-    session,
-  });
-}
-
-/**
- * Posts a sale with trade-in deduction.
- */
-export async function postTradeIn({
-  tenantId,
-  branchId,
-  saleId,
-  tradeInValueCents,
-  saleAmountCents,
-  cashPaidCents,
-  taxCents = 0,
-  costCents = 0,
-  createdBy = null,
-  session = null,
-}) {
-  const tradeInVal = round(tradeInValueCents);
-  const cashPaid = round(cashPaidCents);
-  const totalReceived = add(tradeInVal, cashPaid);
-
-  if (totalReceived !== round(saleAmountCents)) {
-    throw badRequest(
-      `Trade-in value (${tradeInVal}) + Cash paid (${cashPaid}) must equal sale amount (${saleAmountCents})`,
-      'TRADE_IN_MISMATCH'
-    );
-  }
-
-  const salesRev = subtract(saleAmountCents, taxCents);
-  const lines = [
-    { accountCode: '1050', debit: tradeInVal, credit: 0, description: `Trade-in device acquired for sale ${saleId}` },
-    { accountCode: '1010', debit: cashPaid, credit: 0, description: `Cash received for balance of sale ${saleId}` },
-    { accountCode: '4010', debit: 0, credit: salesRev, description: `Sales revenue for trade-in sale ${saleId}` },
-  ];
-
-  if (taxCents > 0) {
-    lines.push({
-      accountCode: '2010',
-      debit: 0,
-      credit: round(taxCents),
-      description: `Tax payable for sale ${saleId}`,
-    });
-  }
-
-  if (costCents > 0) {
-    lines.push(
-      { accountCode: '5010', debit: round(costCents), credit: 0, description: `COGS for sale ${saleId}` },
-      { accountCode: '1050', debit: 0, credit: round(costCents), description: `Sold inventory deduction for sale ${saleId}` }
-    );
-  }
-
-  return await postJournal({
-    tenantId,
-    branchId,
-    referenceType: 'trade_in',
-    referenceId: saleId,
-    description: `Trade-in sale ${saleId}`,
     lines,
     createdBy,
     session,
@@ -701,7 +500,7 @@ export async function postExpense({
   createdBy = null,
   session = null,
 }) {
-  const creditCode = paymentMethod === 'bank' ? '1030' : '1010';
+  const creditCode = accountForMethod(paymentMethod);
   return await postJournal({
     tenantId,
     branchId,
@@ -732,7 +531,7 @@ export async function postOtherIncome({
   createdBy = null,
   session = null,
 }) {
-  const debitCode = paymentMethod === 'bank' ? '1030' : '1010';
+  const debitCode = accountForMethod(paymentMethod);
   return await postJournal({
     tenantId,
     branchId,
@@ -752,6 +551,9 @@ export default {
   DEFAULT_ACCOUNTS,
   ensureDefaultAccounts,
   postJournal,
+  PAYMENT_ACCOUNTS,
+  accountForMethod,
+  postSale,
   postCashSale,
   postCardSale,
   postSplitPayment,

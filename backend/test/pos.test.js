@@ -10,6 +10,7 @@ import Customer from '../src/modules/customers/Customer.model.js';
 import User from '../src/modules/users/User.model.js';
 import { posEvents } from '../src/modules/pos/services/sale.service.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
+import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -589,5 +590,41 @@ describe('POS review fixes', () => {
 
     const quote = await api('post', '/api/pos/quotations', shop.token).set('x-branch-id', String(branchB._id)).send({ lines: [caseLine()] });
     expect(quote.body.data.quoteNumber).toBe('QTE-COL-000001');
+  });
+
+  const ledgerOf = (tenantId, invoiceNumber) =>
+    runWithContext({ tenantId }, async () => await LedgerEntry.findOne({ referenceId: invoiceNumber }).lean());
+  const debitOn = (entry, code) => entry.lines.filter((l) => l.accountCode === code).reduce((s, l) => s + l.debit, 0);
+
+  it('6. posts each payment method to its own ledger account', async () => {
+    const shop = await setupShop('ledger-map@shop.lk', 'Ledger Map Shop');
+    const sell = (body) => api('post', '/api/pos/checkout', shop.token).send({ lines: [caseLine()], ...body });
+
+    const bank = await sell({ payments: [{ method: 'bank_transfer', amountCents: 5000, reference: 'TX1' }] });
+    expect(bank.status).toBe(201);
+    const bankEntry = await ledgerOf(shop.tenantId, bank.body.data.invoiceNumber);
+    expect(debitOn(bankEntry, '1030')).toBe(5000);
+    expect(debitOn(bankEntry, '1010')).toBe(0);
+
+    const cardTradeIn = await sell({
+      tradeInValueCents: 1000,
+      tradeIn: { imei: '490154203237518', modelName: 'Galaxy A10' },
+      customerNic: '200012345678',
+      payments: [{ method: 'card', amountCents: 4000 }],
+    });
+    expect(cardTradeIn.status).toBe(201);
+    const ctEntry = await ledgerOf(shop.tenantId, cardTradeIn.body.data.invoiceNumber);
+    expect(debitOn(ctEntry, '1020')).toBe(4000);
+    expect(debitOn(ctEntry, '1010')).toBe(0);
+    expect(ctEntry.lines.find((l) => l.accountCode === '1050' && l.debit === 1000)).toBeDefined();
+
+    const customer = await runWithContext({ tenantId: shop.tenantId }, async () =>
+      Customer.create({ name: 'Points Person', phone: '0770000001', loyaltyPoints: 200 })
+    );
+    const loyalty = await sell({ customerId: customer._id, payments: [{ method: 'loyalty_points', amountCents: 5000, reference: '50' }] });
+    expect(loyalty.status).toBe(201);
+    const loyaltyEntry = await ledgerOf(shop.tenantId, loyalty.body.data.invoiceNumber);
+    expect(debitOn(loyaltyEntry, '2030')).toBe(5000);
+    expect(debitOn(loyaltyEntry, '1010')).toBe(0);
   });
 });

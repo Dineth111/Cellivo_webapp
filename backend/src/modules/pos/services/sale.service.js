@@ -495,74 +495,23 @@ export async function completeSale({
           savedPayments.push(payDoc);
         }
 
-        // Post double-entry Ledger entry
+        // Post double-entry Ledger entry, built from the actual payments
         const totalCostCents = processedLines.reduce((acc, l) => acc + money.multiplyByQty(l.costPriceCents, l.qty), 0);
-
-        if (totals.tradeInValueCents > 0) {
-          await ledgerService.postTradeIn({
-            tenantId: tid,
-            branchId: bid,
-            saleId: invoiceNumber,
-            tradeInValueCents: totals.tradeInValueCents,
-            saleAmountCents: totals.grandTotalCents + totals.tradeInValueCents,
-            cashPaidCents: totals.grandTotalCents,
-            taxCents: totals.taxCents,
-            costCents: totalCostCents,
-            createdBy: userId,
-            session,
-          });
-        } else if (isCreditSale) {
-          const cashOrCardPaid = normalizedPayments
-            .filter((p) => p.method !== 'credit')
-            .reduce((sum, p) => sum + p.amountCents, 0);
-
-          await ledgerService.postCreditSale({
-            tenantId: tid,
-            branchId: bid,
-            saleId: invoiceNumber,
-            amountCents: totals.grandTotalCents,
-            paidAmountCents: cashOrCardPaid,
-            paymentMethod: normalizedPayments.find((p) => p.method !== 'credit')?.method || 'cash',
-            taxCents: totals.taxCents,
-            costCents: totalCostCents,
-            createdBy: userId,
-            session,
-          });
-        } else if (normalizedPayments.length > 1) {
-          await ledgerService.postSplitPayment({
-            tenantId: tid,
-            branchId: bid,
-            saleId: invoiceNumber,
-            payments: normalizedPayments,
-            totalCents: totals.grandTotalCents,
-            taxCents: totals.taxCents,
-            costCents: totalCostCents,
-            createdBy: userId,
-            session,
-          });
-        } else if (normalizedPayments[0]?.method === 'card') {
-          await ledgerService.postCardSale({
-            tenantId: tid,
-            branchId: bid,
-            saleId: invoiceNumber,
-            amountCents: totals.grandTotalCents,
-            taxCents: totals.taxCents,
-            costCents: totalCostCents,
-            createdBy: userId,
-            session,
-          });
-        } else {
-          await ledgerService.postCashSale({
-            tenantId: tid,
-            branchId: bid,
-            saleId: invoiceNumber,
-            amountCents: totals.grandTotalCents,
-            taxCents: totals.taxCents,
-            costCents: totalCostCents,
-            createdBy: userId,
-            session,
-          });
-        }
+        await ledgerService.postSale({
+          tenantId: tid,
+          branchId: bid,
+          saleId: invoiceNumber,
+          totalCents: totals.grandTotalCents,
+          payments: normalizedPayments,
+          changeDueCents,
+          receivableCents: Math.max(0, totals.grandTotalCents - totalPaidCents),
+          tradeInValueCents: totals.tradeInValueCents,
+          taxCents: totals.taxCents,
+          costCents: totalCostCents,
+          referenceType: isCreditSale ? 'credit_sale' : totals.tradeInValueCents > 0 ? 'trade_in' : 'sale',
+          createdBy: userId,
+          session,
+        });
 
         // Update active CashSession cash sales if tender includes cash
         const cashTenderCents = normalizedPayments
