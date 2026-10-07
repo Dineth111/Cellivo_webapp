@@ -2,6 +2,8 @@ import express from 'express';
 import { protect } from '../../../core/auth.js';
 import { subscriptionGuard } from '../../plans/planLimits.js';
 import { wrap, badRequest } from '../../../core/errors.js';
+import { requirePermission } from '../../../core/permissions.js';
+import * as auditAdapter from '../adapters/audit.adapter.js';
 import { resolveBranch } from '../utils/branch.js';
 import * as ledgerService from '../services/ledger.service.js';
 
@@ -16,6 +18,7 @@ router.use(protect, subscriptionGuard);
  */
 router.post(
   '/journal',
+  requirePermission('finance.create'),
   wrap(async (req, res) => {
     const { referenceType, referenceId, description, lines } = req.body;
     if (!referenceType) {
@@ -35,6 +38,15 @@ router.post(
       createdBy: req.auth.userId,
     });
 
+    await auditAdapter.record({
+      action: 'ledger.manual_journal',
+      entity: 'LedgerEntry',
+      entityId: entry._id,
+      after: { entryNumber: entry.entryNumber, referenceType, referenceId, description, lines: entry.lines },
+      tenantId: req.auth.tenantId,
+      userId: req.auth.userId,
+    });
+
     res.status(201).json({
       success: true,
       message: 'Journal entry posted successfully',
@@ -49,6 +61,7 @@ router.post(
  */
 router.get(
   '/balances',
+  requirePermission('finance.view'),
   wrap(async (req, res) => {
     const branchId = (await resolveBranch(req, { allowAll: true }))?._id ?? null;
     const balances = await ledgerService.getAccountBalances(req.auth.tenantId, branchId);
