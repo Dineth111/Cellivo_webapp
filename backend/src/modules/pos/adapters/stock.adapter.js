@@ -2,6 +2,7 @@
 import FakeStock from '../models/FakeStock.model.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest } from '../../../core/errors.js';
+import { escapeRegex } from '../../../core/validate.js';
 
 /**
  * Execute a stock query within the tenant context.
@@ -23,8 +24,10 @@ export async function lookupByBarcode(tenantId, branchId, barcode) {
  * Search products by name, brand, or barcode within a branch.
  */
 export async function searchProducts(tenantId, branchId, query) {
+  const text = String(query ?? '');
+  if (text.length > 100) throw badRequest('Search text is too long (max 100 characters)', 'SEARCH_TOO_LONG');
   return await withTenant(tenantId, async () => {
-    const reg = new RegExp(query, 'i');
+    const reg = new RegExp(escapeRegex(text), 'i');
     return await FakeStock.find({
       branchId,
       $or: [{ name: reg }, { barcode: reg }, { brand: reg }],

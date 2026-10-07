@@ -743,4 +743,16 @@ describe('POS review fixes', () => {
     const left = await runAsPlatform(async () => HeldCart.find({}).lean());
     expect(left.map((c) => c.cartName)).toEqual(['new', 'new']);
   });
+
+  it('10b. item search treats the query as text, not a regex', async () => {
+    const shop = await setupShop('search-escape@shop.lk', 'Search Escape Shop');
+    const search = (q) => api('get', `/api/pos/items/lookup?q=${encodeURIComponent(q)}`, shop.token);
+
+    const broken = await search('(');
+    expect(broken.status).toBe(200);
+    expect(broken.body.data).toEqual([]);
+    expect((await search('.*')).body.data).toEqual([]);
+    expect((await search('silicone')).body.data.length).toBe(1);
+    expect((await search('x'.repeat(101))).status).toBe(400);
+  });
 });
