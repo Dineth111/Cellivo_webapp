@@ -121,6 +121,14 @@ export async function completeSale({
       throw badRequest('Walk-in customers cannot purchase on credit. Please select a customer.', 'CREDIT_REQUIRES_CUSTOMER');
     }
 
+    // A trade-in value must be backed by a real device (model, and IMEI for phones)
+    if (money.round(tradeInValueCents) > 0) {
+      const isPhone = (tradeIn?.category || 'phone') === 'phone';
+      if (!tradeIn?.modelName || (isPhone && !String(tradeIn.imei || '').trim())) {
+        throw badRequest('Trade-in value needs the traded device: model name, and IMEI for a phone', 'TRADE_IN_DEVICE_REQUIRED');
+      }
+    }
+
     // Trade-in regulatory compliance (IMEI Luhn check + Customer NIC identification)
     if (tradeIn || (tradeInValueCents && tradeInValueCents > 0)) {
       if (tradeIn) {
@@ -250,15 +258,21 @@ export async function completeSale({
 
     const requiresPriceOverrideApproval = (priceChanges.length > 0 || belowCost) && !hasSpecial(userRole, 'override_price');
 
+    // Trade-in limit: owner unlimited; others use role.tradeInLimitCents (not in the Role schema yet, so 0)
+    const tradeInLimitCents = userRole?.key === 'owner' ? Infinity : money.round(userRole?.tradeInLimitCents ?? 0);
+    const requiresTradeInApproval = totals.tradeInValueCents > tradeInLimitCents;
+
     // Verify Manager Approval PIN if required
     let approvedBy = null;
-    if (requiresPriceOverrideApproval || requiresDiscountApproval) {
+    if (requiresPriceOverrideApproval || requiresDiscountApproval || requiresTradeInApproval) {
       const pinVerify = await verifyApprovalPin(tid, managerPin);
       if (!pinVerify.approved) {
         if (requiresDiscountApproval) {
           throw new AppError(400, 'This discount is above your limit. Ask a manager to approve.', 'V-06');
-        } else {
+        } else if (requiresPriceOverrideApproval) {
           throw forbidden('Changing the price or selling below cost requires manager approval', 'PRICE_OVERRIDE_REQUIRES_APPROVAL');
+        } else {
+          throw forbidden('This trade-in value is above your limit. Ask a manager to approve.', 'TRADE_IN_APPROVAL_REQUIRED');
         }
       }
       approvedBy = pinVerify.approver?._id || null;
@@ -275,6 +289,13 @@ export async function completeSale({
     }
     if (requiresDiscountApproval) {
       audits.push({ action: 'pos.discount_approved', before: { limit: userLimit }, after: { highestDiscountPercent, approvedBy } });
+    }
+    if (requiresTradeInApproval) {
+      audits.push({
+        action: 'pos.trade_in_approved',
+        before: { limitCents: tradeInLimitCents },
+        after: { tradeInValueCents: totals.tradeInValueCents, modelName: tradeIn.modelName, imei: tradeIn.imei || null, approvedBy },
+      });
     }
 
     // Credit Limit & Exposure Validation (V-07)

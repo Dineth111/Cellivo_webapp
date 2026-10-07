@@ -504,4 +504,37 @@ describe('POS review fixes', () => {
     expect(approved.status).toBe(201);
     expect((await auditOf(shop.tenantId, 'pos.discount_approved')).length).toBe(1);
   });
+
+  it('3. trade-in value needs a device, and a value over the role limit needs a manager PIN', async () => {
+    const shop = await setupShop('tradein-fix@shop.lk', 'Trade-in Fix Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-tradein@shop.lk');
+    const sale = (token, extra) =>
+      api('post', '/api/pos/checkout', token).send({
+        lines: [caseLine()],
+        tradeInValueCents: 1000,
+        customerNic: '200012345678',
+        payments: [{ method: 'cash', amountCents: 4000 }],
+        ...extra,
+      });
+    const device = { imei: '490154203237518', modelName: 'Galaxy A10' };
+
+    for (const tradeIn of [undefined, { imei: device.imei }, { modelName: 'Galaxy A10' }]) {
+      const res = await sale(shop.token, { tradeIn });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('TRADE_IN_DEVICE_REQUIRED');
+    }
+
+    // cashier's trade-in limit defaults to 0
+    const overLimit = await sale(cashier.token, { tradeIn: device });
+    expect(overLimit.status).toBe(403);
+    expect(overLimit.body.code).toBe('TRADE_IN_APPROVAL_REQUIRED');
+
+    const approved = await sale(cashier.token, { tradeIn: device, managerPin: '9999' });
+    expect(approved.status).toBe(201);
+    expect((await auditOf(shop.tenantId, 'pos.trade_in_approved')).length).toBe(1);
+
+    // non-phone devices need no IMEI
+    const accessory = await sale(shop.token, { tradeIn: { modelName: 'AirPods', category: 'accessory' } });
+    expect(accessory.status).toBe(201);
+  });
 });

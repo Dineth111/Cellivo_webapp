@@ -30,3 +30,7 @@ Each item states the safe default that was implemented. Confirm or change.
 21. **Branches endpoint** is read-only. Create/edit with the plan limit (BR-01) is not built yet.
 22. **Aggregations using `$geoNear` or `$search`** cannot go through the tenant plugin (they must be the first stage). See docs/architecture/tenancy.md.
 23. **Line endings.** The repo mixes CRLF and LF (Windows). Consider a `.gitattributes` with `* text=auto eol=lf`.
+
+## POS review fixes (Dev 3)
+
+24. **Trade-in limit per role.** POS reads `role.tradeInLimitCents` (owner: no limit), but the Role schema (Dev 1) has no such field, so every non-owner role is 0 and any trade-in needs a manager PIN. Add `tradeInLimitCents: { type: Number, default: 0, min: 0 }` to `Role.model.js` and the roles controller.
