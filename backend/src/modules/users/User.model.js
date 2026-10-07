@@ -28,6 +28,10 @@ const userSchema = new mongoose.Schema(
     // SRS SEC-10 lockout
     failedLogins: { type: Number, default: 0, select: false },
     lockUntil: { type: Date, default: null, select: false },
+    // Approval-PIN lockout of the requesting user (users.service verifyApprovalPin)
+    pinFailedAttempts: { type: Number, default: 0, select: false },
+    pinFailedSince: { type: Date, default: null, select: false },
+    pinLockedUntil: { type: Date, default: null, select: false },
     // Single-use invite / password-reset token (only the hash is stored)
     tokenHash: { type: String, select: false, default: null },
     tokenPurpose: { type: String, enum: ['invite', 'reset', null], select: false, default: null },
@@ -41,7 +45,7 @@ userSchema.index({ tokenHash: 1 }, { sparse: true });
 // Never leak secrets even if a field was selected explicitly.
 userSchema.set('toJSON', {
   transform: (doc, ret) => {
-    for (const k of ['passwordHash', 'approvalPinHash', 'tokenHash', 'tokenPurpose', 'tokenExpiresAt', 'failedLogins', 'lockUntil', '__v']) delete ret[k];
+    for (const k of ['passwordHash', 'approvalPinHash', 'tokenHash', 'tokenPurpose', 'tokenExpiresAt', 'failedLogins', 'lockUntil', 'pinFailedAttempts', 'pinFailedSince', 'pinLockedUntil', '__v']) delete ret[k];
     return ret;
   },
 });

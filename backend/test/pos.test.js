@@ -783,7 +783,7 @@ describe('POS review fixes', () => {
     const locked = await discounted('9999');
     expect(locked.status).toBe(429);
     expect(locked.body.code).toBe('PIN_LOCKED');
-    expect((await auditOf(shop.tenantId, 'pos.approval_pin_failed')).length).toBe(5);
+    expect((await auditOf(shop.tenantId, 'pin.verify_failed')).length).toBe(5);
 
     // the owner is a different user, so not locked
     const owner = await api('post', '/api/pos/finance/drawer/open', shop.token).send({ openingFloatCents: 0 });
