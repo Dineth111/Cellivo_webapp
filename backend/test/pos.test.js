@@ -790,3 +790,91 @@ describe('POS review fixes', () => {
     expect(owner.status).toBe(201);
   });
 });
+
+describe('POS review fixes, round 2', () => {
+  const caseLine = (extra = {}) => ({ name: 'Silicone Case', barcode: 'BC-CASE-1', qty: 1, unitPriceCents: 5000, ...extra });
+  const auditOf = (tenantId, action) => runWithContext({ tenantId }, async () => await AuditLog.find({ action }).lean());
+
+  it('1. ledger journal and balances need finance permissions; manual journals are audited', async () => {
+    const shop = await setupShop('ledger-perm@shop.lk', 'Ledger Perm Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-ledger@shop.lk');
+    const tech = await addStaff(shop, 'technician', 'tech-ledger@shop.lk');
+    const journal = {
+      referenceType: 'manual',
+      referenceId: 'ADJ-1',
+      description: 'Owner adjustment',
+      lines: [
+        { accountCode: '1010', debit: 1000, credit: 0 },
+        { accountCode: '4020', debit: 0, credit: 1000 },
+      ],
+    };
+
+    for (const user of [cashier, tech]) {
+      expect((await api('post', '/api/pos/ledger/journal', user.token).send(journal)).status).toBe(403);
+      expect((await api('get', '/api/pos/ledger/balances', user.token)).status).toBe(403);
+    }
+
+    expect((await api('post', '/api/pos/ledger/journal', shop.token).send(journal)).status).toBe(201);
+    expect((await api('get', '/api/pos/ledger/balances', shop.token)).status).toBe(200);
+    const logs = await auditOf(shop.tenantId, 'ledger.manual_journal');
+    expect(logs.length).toBe(1);
+    expect(logs[0].after.lines.length).toBe(2);
+  });
+
+  it('2. returns check the original invoice branch', async () => {
+    const shop = await setupShop('return-branch@shop.lk', 'Return Branch Shop');
+    const manager = await addStaff(shop, 'branch_manager', 'manager-return@shop.lk'); // branch A only
+    const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'B2-' });
+    await runWithContext({ tenantId: shop.tenantId }, async () =>
+      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 5 })
+    );
+    const saleB = await api('post', '/api/pos/checkout', shop.token)
+      .set('x-branch-id', String(branchB._id))
+      .send({ lines: [caseLine()], payments: [{ method: 'cash', amountCents: 5000 }] });
+    expect(saleB.status).toBe(201);
+    const { _id: invoiceId, invoiceNumber } = saleB.body.data;
+
+    expect((await api('get', `/api/pos/returns/lookup/${invoiceNumber}`, manager.token)).status).toBe(403);
+    const ret = await api('post', '/api/pos/returns', manager.token).send({
+      invoiceId,
+      items: [{ barcode: 'BC-CASE-1', qty: 1, condition: 'resellable', reason: 'test' }],
+      refundMethod: 'cash',
+    });
+    expect(ret.status).toBe(403);
+    expect(ret.body.code).toBe('BRANCH_FORBIDDEN');
+
+    // owner (view_all_branches) can look it up
+    expect((await api('get', `/api/pos/returns/lookup/${invoiceNumber}`, shop.token)).status).toBe(200);
+  });
+
+  it('3. void of a trade-in sale removes the device; refused once the device was resold', async () => {
+    const shop = await setupShop('void-tradein@shop.lk', 'Void Trade-in Shop');
+    const tradeInSale = (imei) =>
+      api('post', '/api/pos/checkout', shop.token).send({
+        lines: [caseLine()],
+        tradeInValueCents: 1000,
+        tradeIn: { imei, modelName: 'Galaxy A10' },
+        customerNic: '200012345678',
+        payments: [{ method: 'cash', amountCents: 4000 }],
+      });
+    const stockWith = (imei) => runWithContext({ tenantId: shop.tenantId }, async () => FakeStock.findOne({ 'imeiList.imei': imei }).lean());
+    const voidIt = (id) => api('post', `/api/pos/invoices/${id}/void`, shop.token).send({ reason: 'Wrong sale' });
+
+    const first = await tradeInSale('490154203237518');
+    expect(first.status).toBe(201);
+    expect(await stockWith('490154203237518')).not.toBeNull();
+    expect((await voidIt(first.body.data._id)).status).toBe(200);
+    expect(await stockWith('490154203237518')).toBeNull();
+
+    const second = await tradeInSale('356938035643809');
+    expect(second.status).toBe(201);
+    const resold = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [{ imei: '356938035643809', qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 1000 }],
+    });
+    expect(resold.status).toBe(201);
+    const blocked = await voidIt(second.body.data._id);
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('CANNOT_VOID_TRADEIN_SOLD');
+  });
+});

@@ -185,6 +185,29 @@ export async function addTradeIn(tenantId, branchId, tradeInData, session = null
 }
 
 /**
+ * Takes a traded-in unit back out of stock (void of the trade-in sale).
+ * Refuses with CANNOT_VOID_TRADEIN_SOLD if the unit was already sold on.
+ */
+export async function removeTradeIn(tenantId, branchId, imeiOrBarcode, session = null) {
+  return await withTenant(tenantId, async () => {
+    const alreadySold = () =>
+      badRequest(`Traded-in device ${imeiOrBarcode} was already sold. Process a return instead of a void.`, 'CANNOT_VOID_TRADEIN_SOLD');
+
+    let stock = await FakeStock.findOne({ branchId, 'imeiList.imei': imeiOrBarcode }).session(session);
+    if (stock) {
+      if (stock.imeiList.find((i) => i.imei === imeiOrBarcode).status === 'sold') throw alreadySold();
+      stock.imeiList = stock.imeiList.filter((i) => i.imei !== imeiOrBarcode);
+    } else {
+      stock = await FakeStock.findOne({ branchId, barcode: imeiOrBarcode }).session(session);
+      if (!stock || stock.qty < 1) throw alreadySold();
+    }
+    stock.qty = Math.max(0, stock.qty - 1);
+    await stock.save({ session });
+    return { success: true, product: stock };
+  });
+}
+
+/**
  * Get product cost in cents by barcode or IMEI.
  */
 export async function getCost(tenantId, barcodeOrImei) {
@@ -205,5 +228,6 @@ export default {
   deductStock,
   restockReturn,
   addTradeIn,
+  removeTradeIn,
   getCost,
 };

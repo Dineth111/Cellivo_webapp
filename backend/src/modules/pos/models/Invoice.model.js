@@ -56,6 +56,11 @@ const invoiceSchema = new mongoose.Schema(
     discountCents: { type: Number, default: 0, min: 0 },
     taxCents: { type: Number, default: 0, min: 0 },
     tradeInCents: { type: Number, default: 0, min: 0 },
+    // the traded-in unit added to stock, so a void can take it back out
+    tradeInDevice: {
+      type: new mongoose.Schema({ modelName: String, imei: String, barcode: String }, { _id: false }),
+      default: null,
+    },
     grandTotalCents: { type: Number, required: true, min: 0 },
     totalPaidCents: { type: Number, default: 0, min: 0 },
     changeDueCents: { type: Number, default: 0, min: 0 },

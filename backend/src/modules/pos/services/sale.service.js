@@ -385,8 +385,9 @@ export async function completeSale({
         }
 
         // Add trade-in device to stock if present
+        let tradeInDevice = null;
         if (totals.tradeInValueCents > 0 && tradeIn) {
-          await stockAdapter.addTradeIn(
+          const tradeInStock = await stockAdapter.addTradeIn(
             tid,
             bid,
             {
@@ -395,6 +396,7 @@ export async function completeSale({
             },
             session
           );
+          tradeInDevice = { modelName: tradeIn.modelName, imei: tradeIn.imei ? String(tradeIn.imei).trim() : null, barcode: tradeInStock.barcode };
         }
 
         // Create Invoice
@@ -411,6 +413,7 @@ export async function completeSale({
           discountCents: totals.totalDiscountCents,
           taxCents: totals.taxCents,
           tradeInCents: totals.tradeInValueCents,
+          tradeInDevice,
           grandTotalCents: totals.grandTotalCents,
           totalPaidCents: isCreditSale ? cashOrCollectedPaidCents : totalPaidCents,
           changeDueCents,
@@ -605,6 +608,12 @@ export async function voidInvoice({
     session.startTransaction();
 
     try {
+      // 0. Take the traded-in device back out of stock (refused if it was resold)
+      if (invoice.tradeInDevice) {
+        const d = invoice.tradeInDevice;
+        await stockAdapter.removeTradeIn(tid, invoice.branchId, d.imei || d.barcode, session);
+      }
+
       // 1. Restock sold items
       for (const line of invoice.lines) {
         await stockAdapter.restockReturn(tid, invoice.branchId, line.imei || line.barcode, line.qty, session);
