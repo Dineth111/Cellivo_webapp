@@ -143,31 +143,35 @@ export async function completeSale({
     // 3. Validate items, IMEI duplication, and prices
     const processedLines = [];
     const seenImeis = new Set();
-    let requiresPriceOverrideApproval = false;
+    const priceChanges = [];
+    let belowCost = false;
     let requiresDiscountApproval = false;
     let highestDiscountPercent = Number(invoiceDiscountPercent || 0);
 
     for (const raw of lines) {
       const qty = Number(raw.qty || 1);
 
-      // Auto-apply wholesale price if customer is wholesale and raw price wasn't manually overridden
-      let unitPriceCents = money.round(raw.unitPriceCents ?? raw.priceCents ?? 0);
-      let resolvedName = raw.name;
-      if (unitPriceCents === 0 && (raw.barcode || raw.imei)) {
-        const stockItem = await stockAdapter.lookupByBarcode(tid, bid, raw.barcode);
-        if (stockItem) {
-          unitPriceCents = money.round(stockItem.sellingPriceCents || 0);
-          if (!resolvedName) resolvedName = stockItem.name;
-        }
+      // Price and cost always come from stock on the server, never from the request
+      const stockItem =
+        (raw.imei && (await stockAdapter.lookupImei(tid, bid, String(raw.imei).trim()))?.product) ||
+        (raw.barcode && (await stockAdapter.lookupByBarcode(tid, bid, raw.barcode)));
+      if (!stockItem) {
+        throw badRequest(`${raw.name || raw.imei || raw.barcode || 'Item'} is not in stock at this branch`, 'V-05');
       }
-      if (isWholesaleCustomer && raw.wholesalePriceCents && raw.wholesalePriceCents > 0) {
-        unitPriceCents = money.round(raw.wholesalePriceCents);
-      } else if (isWholesaleCustomer && (raw.barcode || raw.imei)) {
-        const stockItem = await stockAdapter.lookupByBarcode(tid, bid, raw.barcode);
-        if (stockItem && stockItem.wholesalePriceCents > 0) {
-          unitPriceCents = money.round(stockItem.wholesalePriceCents);
-        }
+      const resolvedName = raw.name || stockItem.name;
+      const retailPriceCents = money.round(stockItem.sellingPriceCents || 0);
+      const listPriceCents =
+        isWholesaleCustomer && stockItem.wholesalePriceCents > 0 ? money.round(stockItem.wholesalePriceCents) : retailPriceCents;
+      const requested = raw.unitPriceCents ?? raw.priceCents;
+      // A wholesale customer gets the wholesale tier when the cart still shows the retail price
+      const unitPriceCents =
+        requested == null || (isWholesaleCustomer && money.round(requested) === retailPriceCents) ? listPriceCents : money.round(requested);
+      const costPriceCents = money.round(stockItem.costPriceCents || 0);
+
+      if (unitPriceCents !== listPriceCents) {
+        priceChanges.push({ name: resolvedName, imei: raw.imei || null, barcode: raw.barcode || '', from: listPriceCents, to: unitPriceCents });
       }
+      if (unitPriceCents < costPriceCents) belowCost = true;
 
       // IMEI validations
       if (raw.imei) {
@@ -195,19 +199,6 @@ export async function completeSale({
         }
       }
 
-      // Cost price resolution
-      let costPriceCents = money.round(raw.costPriceCents || 0);
-      if (costPriceCents === 0 && (raw.barcode || raw.imei)) {
-        costPriceCents = await stockAdapter.getCost(tid, raw.imei || raw.barcode);
-      }
-
-      // Below cost check (requires override_price special permission)
-      if (unitPriceCents < costPriceCents) {
-        if (!hasSpecial(userRole, 'override_price')) {
-          requiresPriceOverrideApproval = true;
-        }
-      }
-
       // Line discount check
       const lineDiscPercent = Number(raw.discountPercent || 0);
       if (lineDiscPercent > highestDiscountPercent) {
@@ -224,7 +215,7 @@ export async function completeSale({
 
       processedLines.push({
         productId: raw.productId || null,
-        name: resolvedName || raw.name || 'Product',
+        name: resolvedName || 'Product',
         barcode: raw.barcode || '',
         imei: raw.imei ? String(raw.imei).trim() : null,
         qty,
@@ -247,6 +238,8 @@ export async function completeSale({
       requiresDiscountApproval = true;
     }
 
+    const requiresPriceOverrideApproval = (priceChanges.length > 0 || belowCost) && !hasSpecial(userRole, 'override_price');
+
     // Verify Manager Approval PIN if required
     let approvedBy = null;
     if (requiresPriceOverrideApproval || requiresDiscountApproval) {
@@ -255,20 +248,23 @@ export async function completeSale({
         if (requiresDiscountApproval) {
           throw new AppError(400, 'This discount is above your limit. Ask a manager to approve.', 'V-06');
         } else {
-          throw forbidden('Price override below cost requires manager approval PIN', 'PRICE_OVERRIDE_REQUIRES_APPROVAL');
+          throw forbidden('Changing the price or selling below cost requires manager approval', 'PRICE_OVERRIDE_REQUIRES_APPROVAL');
         }
       }
       approvedBy = pinVerify.approver?._id || null;
+    }
 
-      // Audit approval
-      await auditAdapter.record({
-        action: requiresDiscountApproval ? 'pos.discount_approved' : 'pos.price_override_approved',
-        entity: 'Invoice',
-        before: { limit: userLimit },
-        after: { highestDiscountPercent, approvedBy },
-        tenantId: tid,
-        userId,
+    // Written after the sale commits, against the invoice
+    const audits = [];
+    if (priceChanges.length > 0 || belowCost) {
+      audits.push({
+        action: 'pos.price_override',
+        before: { lines: priceChanges.map((c) => ({ name: c.name, imei: c.imei, barcode: c.barcode, unitPriceCents: c.from })) },
+        after: { lines: priceChanges.map((c) => ({ name: c.name, imei: c.imei, barcode: c.barcode, unitPriceCents: c.to })), belowCost, approvedBy },
       });
+    }
+    if (requiresDiscountApproval) {
+      audits.push({ action: 'pos.discount_approved', before: { limit: userLimit }, after: { highestDiscountPercent, approvedBy } });
     }
 
     // 4. Calculate invoice totals
@@ -570,6 +566,10 @@ export async function completeSale({
         }
         throw err;
       }
+    }
+
+    for (const a of audits) {
+      await auditAdapter.record({ ...a, entity: 'Invoice', entityId: createdInvoice._id, tenantId: tid, userId });
     }
 
     // 7. Emit in-process sale.completed event

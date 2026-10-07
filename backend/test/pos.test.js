@@ -9,6 +9,7 @@ import Payment from '../src/modules/pos/models/Payment.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
 import User from '../src/modules/users/User.model.js';
 import { posEvents } from '../src/modules/pos/services/sale.service.js';
+import AuditLog from '../src/modules/audit/AuditLog.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -420,5 +421,48 @@ describe('POS Sale Backend (F-09) Engine', () => {
       const stock = await FakeStock.findOne({ barcode: 'BC-CASE-1' });
       expect(stock.qty).toBe(3); // restored back to 3
     });
+  });
+});
+
+describe('POS review fixes', () => {
+  const caseLine = (extra = {}) => ({ name: 'Silicone Case', barcode: 'BC-CASE-1', qty: 1, unitPriceCents: 5000, ...extra });
+  const auditOf = (tenantId, action) => runWithContext({ tenantId }, async () => await AuditLog.find({ action }).lean());
+
+  it('1. reads price and cost from stock: client cost ignored, price change needs override_price or PIN', async () => {
+    const shop = await setupShop('price-fix@shop.lk', 'Price Fix Shop');
+    const cashier = await addStaff(shop, 'cashier', 'cashier-price@shop.lk');
+
+    // below cost with a forged costPriceCents of 0 -> still blocked
+    const belowCost = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ unitPriceCents: 1000, costPriceCents: 0 })],
+      payments: [{ method: 'cash', amountCents: 1000 }],
+    });
+    expect(belowCost.status).toBe(403);
+    expect(belowCost.body.code).toBe('PRICE_OVERRIDE_REQUIRES_APPROVAL');
+
+    // above cost but different from the stock price -> blocked without permission
+    const changed = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ unitPriceCents: 4000 })],
+      payments: [{ method: 'cash', amountCents: 4000 }],
+    });
+    expect(changed.status).toBe(403);
+
+    // same change with a manager PIN -> accepted
+    const withPin = await api('post', '/api/pos/checkout', cashier.token).send({
+      lines: [caseLine({ unitPriceCents: 4000 })],
+      managerPin: '9999',
+      payments: [{ method: 'cash', amountCents: 4000 }],
+    });
+    expect(withPin.status).toBe(201);
+
+    // owner has override_price -> accepted, cost comes from stock, audited with before/after
+    const owner = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [caseLine({ unitPriceCents: 4500, costPriceCents: 1 })],
+      payments: [{ method: 'cash', amountCents: 4500 }],
+    });
+    expect(owner.status).toBe(201);
+    expect(owner.body.data.lines[0].costPriceCents).toBe(2000);
+    const logs = await auditOf(shop.tenantId, 'pos.price_override');
+    expect(logs.some((l) => l.before?.lines?.[0]?.unitPriceCents === 5000 && l.after?.lines?.[0]?.unitPriceCents === 4500)).toBe(true);
   });
 });
