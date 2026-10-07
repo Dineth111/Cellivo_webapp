@@ -346,6 +346,10 @@ export async function completeSale({
     }
 
     const changeDueCents = Math.max(0, money.subtract(totalPaidCents, totals.grandTotalCents));
+    const cashTenderedCents = normalizedPayments.filter((p) => p.method === 'cash').reduce((sum, p) => sum + p.amountCents, 0);
+    if (changeDueCents > cashTenderedCents) {
+      throw badRequest('Change can only be given from cash. Reduce the non-cash payment to the amount due.', 'CHANGE_REQUIRES_CASH');
+    }
     const cashOrCollectedPaidCents = normalizedPayments
       .filter((p) => p.method !== 'credit')
       .reduce((sum, p) => sum + p.amountCents, 0);

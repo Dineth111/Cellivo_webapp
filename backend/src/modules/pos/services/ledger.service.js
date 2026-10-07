@@ -179,6 +179,7 @@ export async function postSale({
     }
     if (amt > 0) lines.push({ accountCode: accountForMethod(p.method), debit: amt, credit: 0, description: `Payment via ${p.method} for sale ${saleId}` });
   }
+  if (changeLeft > 0) throw badRequest('Change can only be given from cash', 'CHANGE_REQUIRES_CASH');
   if (receivableCents > 0) {
     lines.push({ accountCode: '1040', debit: round(receivableCents), credit: 0, description: `Accounts receivable for sale ${saleId}` });
   }

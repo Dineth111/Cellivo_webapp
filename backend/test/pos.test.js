@@ -627,4 +627,34 @@ describe('POS review fixes', () => {
     expect(debitOn(loyaltyEntry, '2030')).toBe(5000);
     expect(debitOn(loyaltyEntry, '1010')).toBe(0);
   });
+
+  it('7. split payment with change posts cash net of change; change without cash is rejected', async () => {
+    const shop = await setupShop('split-change@shop.lk', 'Split Change Shop');
+    const res = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [{ name: 'iPhone 15 Pro', barcode: 'BC-PHONE-1', imei: 'IMEI-001', qty: 1, unitPriceCents: 395400 }],
+      invoiceDiscountAmountCents: 490,
+      tradeInValueCents: 45000,
+      tradeIn: { imei: '490154203237518', modelName: 'iPhone 11' },
+      customerNic: '200012345678',
+      payments: [
+        { method: 'card', amountCents: 300000 },
+        { method: 'cash', amountCents: 50000 },
+      ],
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.data.grandTotalCents).toBe(349910);
+    expect(res.body.data.changeDueCents).toBe(90);
+    const entry = await ledgerOf(shop.tenantId, res.body.data.invoiceNumber);
+    expect(debitOn(entry, '1010')).toBe(49910);
+    expect(debitOn(entry, '1020')).toBe(300000);
+    const debits = entry.lines.reduce((s, l) => s + l.debit, 0);
+    expect(debits).toBe(entry.lines.reduce((s, l) => s + l.credit, 0));
+
+    const cardOverpay = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [caseLine()],
+      payments: [{ method: 'card', amountCents: 6000 }],
+    });
+    expect(cardOverpay.status).toBe(400);
+    expect(cardOverpay.body.code).toBe('CHANGE_REQUIRES_CASH');
+  });
 });
