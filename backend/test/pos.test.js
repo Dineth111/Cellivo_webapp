@@ -657,4 +657,18 @@ describe('POS review fixes', () => {
     expect(cardOverpay.status).toBe(400);
     expect(cardOverpay.body.code).toBe('CHANGE_REQUIRES_CASH');
   });
+
+  const drawerCash = async (token) => (await api('get', '/api/pos/finance/drawer/current', token)).body.data.expectedCashCents;
+
+  it('8. drawer expected cash rises by cash kept, not cash tendered', async () => {
+    const shop = await setupShop('drawer-change@shop.lk', 'Drawer Change Shop');
+    expect((await api('post', '/api/pos/finance/drawer/open', shop.token).send({ openingFloatCents: 1000 })).status).toBe(201);
+
+    const sale = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [caseLine({ unitPriceCents: 9500 })],
+      payments: [{ method: 'cash', amountCents: 10000 }],
+    });
+    expect(sale.status).toBe(201);
+    expect(await drawerCash(shop.token)).toBe(1000 + 9500);
+  });
 });

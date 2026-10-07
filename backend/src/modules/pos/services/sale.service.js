@@ -517,16 +517,13 @@ export async function completeSale({
           session,
         });
 
-        // Update active CashSession cash sales if tender includes cash
-        const cashTenderCents = normalizedPayments
-          .filter((p) => p.method === 'cash')
-          .reduce((sum, p) => sum + p.amountCents, 0);
-
-        if (cashTenderCents > 0) {
+        // Drawer keeps the cash tendered minus the change handed back
+        const cashKeptCents = cashTenderedCents - changeDueCents;
+        if (cashKeptCents > 0) {
           await financeService.updateSessionCashSale({
             tenantId: tid,
             branchId: bid,
-            amountCents: cashTenderCents,
+            amountCents: cashKeptCents,
             isRefund: false,
             session,
             userId,
