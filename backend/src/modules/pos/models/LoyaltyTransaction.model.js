@@ -23,7 +23,7 @@ const loyaltyTransactionSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['earn', 'redeem', 'return_reversal', 'installment_earn'],
+      enum: ['earn', 'redeem', 'return_reversal', 'installment_earn', 'void_reversal'],
       required: true,
     },
     points: {

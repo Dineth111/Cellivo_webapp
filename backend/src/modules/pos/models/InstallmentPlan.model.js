@@ -44,7 +44,7 @@ const installmentPlanSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['active', 'completed', 'defaulted'],
+      enum: ['active', 'completed', 'defaulted', 'cancelled'],
       default: 'active',
       index: true,
     },

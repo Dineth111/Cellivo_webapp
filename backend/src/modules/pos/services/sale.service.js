@@ -5,6 +5,8 @@ import Payment from '../models/Payment.model.js';
 import InvoiceSequence from '../models/InvoiceSequence.model.js';
 import HeldCart from '../models/HeldCart.model.js';
 import Quotation from '../models/Quotation.model.js';
+import LedgerEntry from '../models/LedgerEntry.model.js';
+import InstallmentPlan from '../models/InstallmentPlan.model.js';
 import Customer from '../../customers/Customer.model.js';
 import Branch from '../../branches/Branch.model.js';
 import Tenant from '../../tenants/Tenant.model.js';
@@ -590,31 +592,65 @@ export async function voidInvoice({
     if (invoice.status === 'voided') {
       throw badRequest('Invoice is already voided', 'ALREADY_VOIDED');
     }
+    if (['returned', 'partially_returned'].includes(invoice.status)) {
+      throw badRequest('This invoice has returns against it. Process a return instead of a void.', 'CANNOT_VOID_RETURNED');
+    }
+    const plan = invoice.installmentPlanId ? await InstallmentPlan.findById(invoice.installmentPlanId) : null;
+    if (plan && plan.remainingBalanceCents < plan.financedAmountCents) {
+      throw badRequest('Installments were already collected on this invoice. Process a return instead of a void.', 'CANNOT_VOID_COLLECTED');
+    }
+    const previousStatus = invoice.status;
 
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      // 1. Restock returned items
+      // 1. Restock sold items
       for (const line of invoice.lines) {
         await stockAdapter.restockReturn(tid, invoice.branchId, line.imei || line.barcode, line.qty, session);
       }
 
-      // 2. Void reversal in double-entry ledger
-      // Find original ledger entry referencing invoiceNumber
-      await ledgerService.ensureDefaultAccounts(tid, session);
-      const ledgerEntry = await mongoose.model('LedgerEntry').findOne({ referenceId: invoice.invoiceNumber }).session(session);
-      if (ledgerEntry && !ledgerEntry.isVoided) {
-        await ledgerService.postVoidReversal({
+      // 2. Reverse every ledger entry posted for this invoice
+      const entries = await LedgerEntry.find({ referenceId: invoice.invoiceNumber, isVoided: { $ne: true } }).session(session);
+      for (const entry of entries) {
+        await ledgerService.postVoidReversal({ tenantId: tid, originalEntryNumber: entry.entryNumber, reason, createdBy: userId, session });
+      }
+
+      // 3. Payments are kept for the record and marked voided
+      const payments = await Payment.find({ invoiceId: invoice._id }).session(session).lean();
+      await Payment.updateMany({ invoiceId: invoice._id }, { $set: { status: 'voided' } }, { session });
+
+      // 4. Customer balance: the plan's financed amount, or the unpaid credit
+      if (invoice.customerId) {
+        const owed = plan
+          ? plan.remainingBalanceCents
+          : payments.some((p) => p.method === 'credit')
+            ? Math.max(0, invoice.grandTotalCents - invoice.totalPaidCents)
+            : 0;
+        if (owed > 0) {
+          await Customer.updateOne({ _id: invoice.customerId }, { $inc: { currentBalanceCents: -owed } }, { session });
+        }
+        await loyaltyService.reverseInvoicePoints({
           tenantId: tid,
-          originalEntryNumber: ledgerEntry.entryNumber,
-          reason,
-          createdBy: userId,
+          branchId: invoice.branchId,
+          customerId: invoice.customerId,
+          invoiceId: invoice._id,
           session,
         });
       }
+      if (plan) {
+        plan.status = 'cancelled';
+        plan.remainingBalanceCents = 0;
+        await plan.save({ session });
+      }
 
-      // 3. Update invoice status
+      // 5. Cash kept in the drawer goes back out as a refund
+      const cashKeptCents = payments.filter((p) => p.method === 'cash').reduce((sum, p) => sum + p.amountCents, 0) - invoice.changeDueCents;
+      if (cashKeptCents > 0) {
+        await financeService.updateSessionCashSale({ tenantId: tid, branchId: invoice.branchId, amountCents: cashKeptCents, isRefund: true, session, userId });
+      }
+
+      // 6. Update invoice status
       invoice.status = 'voided';
       invoice.voidReason = String(reason).trim();
       invoice.voidedAt = new Date();
@@ -634,7 +670,7 @@ export async function voidInvoice({
       action: 'invoice.void',
       entity: 'Invoice',
       entityId: invoice._id,
-      before: { status: 'completed' },
+      before: { status: previousStatus },
       after: { status: 'voided', reason },
       tenantId: tid,
       userId,

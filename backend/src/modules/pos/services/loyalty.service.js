@@ -236,6 +236,38 @@ export async function reversePoints({
 }
 
 /**
+ * Undoes every point movement of an invoice (earned and redeemed) when it is voided.
+ */
+export async function reverseInvoicePoints({ tenantId, branchId = null, customerId, invoiceId, session = null }) {
+  if (!customerId) return null;
+  const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
+
+  return await runWithContext({ tenantId: tid }, async () => {
+    const txs = await LoyaltyTransaction.find({ invoiceId }).session(session).lean();
+    const net = txs.reduce((sum, t) => sum + (t.points || 0), 0);
+    if (net === 0) return null;
+
+    const customer = await Customer.findById(customerId).session(session);
+    if (!customer) return null;
+    customer.loyaltyPoints = Math.max(0, (customer.loyaltyPoints || 0) - net);
+    await customer.save({ session });
+
+    const tx = new LoyaltyTransaction({
+      branchId,
+      customerId,
+      invoiceId,
+      type: 'void_reversal',
+      points: -net,
+      amountCents: 0,
+      balanceAfter: customer.loyaltyPoints,
+      date: new Date(),
+    });
+    await tx.save({ session });
+    return tx;
+  });
+}
+
+/**
  * Retrieves customer loyalty balance and transaction history.
  */
 export async function getCustomerLoyaltyHistory(tenantId, customerId) {
@@ -270,5 +302,6 @@ export default {
   accruePoints,
   redeemPoints,
   reversePoints,
+  reverseInvoicePoints,
   getCustomerLoyaltyHistory,
 };

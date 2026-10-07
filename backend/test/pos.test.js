@@ -671,4 +671,58 @@ describe('POS review fixes', () => {
     expect(sale.status).toBe(201);
     expect(await drawerCash(shop.token)).toBe(1000 + 9500);
   });
+
+  it('9. void reverses ledger, payments, customer balance, loyalty and drawer; returned invoices cannot be voided', async () => {
+    const shop = await setupShop('void-full@shop.lk', 'Void Full Shop');
+    const voidIt = (id) => api('post', `/api/pos/invoices/${id}/void`, shop.token).send({ reason: 'Keyed wrongly' });
+    const inTenant = (fn) => runWithContext({ tenantId: shop.tenantId }, fn);
+    const customer = await inTenant(async () =>
+      Customer.create({ name: 'Void Customer', phone: '0770000002', creditLimitCents: 100000, loyaltyPoints: 200 })
+    );
+    const customerNow = () => inTenant(async () => Customer.findById(customer._id).lean());
+
+    // credit sale -> balance restored
+    const credit = await api('post', '/api/pos/checkout', shop.token).send({
+      customerId: customer._id,
+      lines: [caseLine()],
+      payments: [{ method: 'credit', amountCents: 5000 }],
+    });
+    expect(credit.status).toBe(201);
+    expect((await customerNow()).currentBalanceCents).toBe(5000);
+    expect((await voidIt(credit.body.data._id)).status).toBe(200);
+    expect((await customerNow()).currentBalanceCents).toBe(0);
+
+    // cash sale with change -> drawer back to the float, every ledger entry reversed, payments kept as voided
+    await api('post', '/api/pos/finance/drawer/open', shop.token).send({ openingFloatCents: 1000 });
+    const cash = await api('post', '/api/pos/checkout', shop.token).send({ lines: [caseLine()], payments: [{ method: 'cash', amountCents: 6000 }] });
+    expect(await drawerCash(shop.token)).toBe(6000);
+    expect((await voidIt(cash.body.data._id)).status).toBe(200);
+    expect(await drawerCash(shop.token)).toBe(1000);
+    const entries = await inTenant(async () => LedgerEntry.find({ referenceId: cash.body.data.invoiceNumber }).lean());
+    expect(entries.every((e) => e.isVoided)).toBe(true);
+    const pays = await inTenant(async () => Payment.find({ invoiceId: cash.body.data._id }).lean());
+    expect(pays.length).toBe(1);
+    expect(pays[0].status).toBe('voided');
+
+    // loyalty earned and redeemed are both restored
+    const loyal = await api('post', '/api/pos/checkout', shop.token).send({
+      customerId: customer._id,
+      lines: [caseLine({ qty: 3 })],
+      payments: [
+        { method: 'loyalty_points', amountCents: 5000, reference: '50' },
+        { method: 'cash', amountCents: 10000 },
+      ],
+    });
+    expect(loyal.status).toBe(201);
+    expect((await customerNow()).loyaltyPoints).toBe(200 - 50 + 1);
+    expect((await voidIt(loyal.body.data._id)).status).toBe(200);
+    expect((await customerNow()).loyaltyPoints).toBe(200);
+
+    // returned invoice cannot be voided
+    const sold = await api('post', '/api/pos/checkout', shop.token).send({ lines: [caseLine()], payments: [{ method: 'cash', amountCents: 5000 }] });
+    await inTenant(async () => Invoice.updateOne({ _id: sold.body.data._id }, { status: 'partially_returned' }));
+    const blocked = await voidIt(sold.body.data._id);
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('CANNOT_VOID_RETURNED');
+  });
 });

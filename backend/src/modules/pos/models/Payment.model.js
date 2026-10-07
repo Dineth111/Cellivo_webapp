@@ -14,7 +14,7 @@ const paymentSchema = new mongoose.Schema(
     reference: { type: String, default: '', trim: true },
     status: {
       type: String,
-      enum: ['paid', 'pending', 'bounced'],
+      enum: ['paid', 'pending', 'bounced', 'voided'],
       default: 'paid',
       index: true,
     },
