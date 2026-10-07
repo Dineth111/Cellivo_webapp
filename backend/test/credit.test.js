@@ -126,7 +126,7 @@ describe('Phase 6: Credit and Installments (F-11, POS-09, CRM-03 to CRM-05)', ()
 
     expect(exceedRes.status).toBe(400);
     expect(exceedRes.body.code).toBe('V-07');
-    expect(exceedRes.body.message).toMatch(/Nimal Perera would go over their credit limit by 100000\. Take a payment or ask a manager to approve\./);
+    expect(exceedRes.body.message).toMatch(/Nimal Perera would go over their credit limit by Rs 1,000\.00\. Take a payment or ask a manager to approve\./);
 
     // Provide invalid manager PIN -> still blocked
     const badPinRes = await api('post', '/api/pos/sales/checkout', shop.token).send({

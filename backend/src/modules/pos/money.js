@@ -188,7 +188,17 @@ export function calculateInvoiceTotals({
   };
 }
 
+/**
+ * Formats cents for user-facing messages: 125000 -> "Rs 1,250.00".
+ */
+export function formatRupees(cents) {
+  const c = round(cents);
+  const abs = Math.abs(c);
+  return `${c < 0 ? '-' : ''}Rs ${Math.floor(abs / 100).toLocaleString('en-US')}.${String(abs % 100).padStart(2, '0')}`;
+}
+
 export default {
+  formatRupees,
   round,
   add,
   subtract,

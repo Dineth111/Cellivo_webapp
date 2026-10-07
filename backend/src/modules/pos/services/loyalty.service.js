@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { formatRupees } from '../money.js';
 import Customer from '../../customers/Customer.model.js';
 import LoyaltyTransaction from '../models/LoyaltyTransaction.model.js';
 import { runWithContext } from '../../../core/tenantContext.js';
@@ -55,7 +56,7 @@ export async function validateRedemption(tenantId, customerId, pointsToRedeem, a
       const expectedAmountCents = Math.round(Number(amountCents));
       if (calculatedValueCents !== expectedAmountCents) {
         throw badRequest(
-          `Redemption amount mismatch: ${requestedPoints} points equals ${calculatedValueCents} cents, but received ${expectedAmountCents} cents`,
+          `Redemption amount mismatch: ${requestedPoints} points equals ${formatRupees(calculatedValueCents)}, but received ${formatRupees(expectedAmountCents)}`,
           'REDEMPTION_AMOUNT_MISMATCH'
         );
       }

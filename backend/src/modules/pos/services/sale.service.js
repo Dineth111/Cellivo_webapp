@@ -318,7 +318,7 @@ export async function completeSale({
           if (!pinVerify.approved) {
             throw new AppError(
               400,
-              `${custDoc.name} would go over their credit limit by ${excess}. Take a payment or ask a manager to approve.`,
+              `${custDoc.name} would go over their credit limit by ${money.formatRupees(excess)}. Take a payment or ask a manager to approve.`,
               'V-07'
             );
           }
@@ -344,7 +344,7 @@ export async function completeSale({
     }
 
     if (!isCreditSale && totalPaidCents < totals.grandTotalCents) {
-      throw new AppError(400, `Payments are ${totals.grandTotalCents - totalPaidCents} short of the total.`, 'V-08');
+      throw new AppError(400, `Payments are ${money.formatRupees(totals.grandTotalCents - totalPaidCents)} short of the total.`, 'V-08');
     }
 
     const changeDueCents = Math.max(0, money.subtract(totalPaidCents, totals.grandTotalCents));

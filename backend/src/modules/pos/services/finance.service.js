@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { formatRupees } from '../money.js';
 import CashSession from '../models/CashSession.model.js';
 import BankAccount from '../models/BankAccount.model.js';
 import Cheque from '../models/Cheque.model.js';
@@ -203,7 +204,7 @@ export async function closeSession({
       requiresApproval = true;
       if (!managerPin) {
         throw forbidden(
-          `Drawer variance of ${Math.abs(variance)} cents exceeds tolerance of ${toleranceCents} cents. Manager approval PIN required.`,
+          `Drawer variance of ${formatRupees(Math.abs(variance))} exceeds tolerance of ${formatRupees(toleranceCents)}. Manager approval PIN required.`,
           'VARIANCE_REQUIRES_APPROVAL'
         );
       }

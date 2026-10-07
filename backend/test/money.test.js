@@ -8,6 +8,7 @@ import {
   calculateTax,
   calculateLine,
   calculateInvoiceTotals,
+  formatRupees,
 } from '../src/modules/pos/money.js';
 
 describe('POS Money Utility', () => {
@@ -158,5 +159,14 @@ describe('POS Money Utility', () => {
       expect(result.tradeInValueCents).toBe(2000);
       expect(result.grandTotalCents).toBe(22200);
     });
+  });
+});
+
+describe('formatRupees', () => {
+  it('shows cents as rupees with thousands separators', () => {
+    expect(formatRupees(125000)).toBe('Rs 1,250.00');
+    expect(formatRupees(5)).toBe('Rs 0.05');
+    expect(formatRupees(123456789)).toBe('Rs 1,234,567.89');
+    expect(formatRupees(-1050)).toBe('-Rs 10.50');
   });
 });

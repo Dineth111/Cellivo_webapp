@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { formatRupees } from '../money.js';
 import InstallmentPlan from '../models/InstallmentPlan.model.js';
 import Customer from '../../customers/Customer.model.js';
 import Invoice from '../models/Invoice.model.js';
@@ -101,7 +102,7 @@ export async function checkCreditEligibility({
       if (!pinVerify.approved) {
         throw new AppError(
           400,
-          `${customer.name} would go over their credit limit by ${excess}. Take a payment or ask a manager to approve.`,
+          `${customer.name} would go over their credit limit by ${formatRupees(excess)}. Take a payment or ask a manager to approve.`,
           'V-07'
         );
       }

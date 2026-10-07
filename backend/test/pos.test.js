@@ -284,7 +284,7 @@ describe('POS Sale Backend (F-09) Engine', () => {
 
     expect(shortPayRes.status).toBe(400);
     expect(shortPayRes.body.code).toBe('V-08');
-    expect(shortPayRes.body.message).toMatch(/Payments are 1000 short of the total/);
+    expect(shortPayRes.body.message).toMatch(/Payments are Rs 10.00 short of the total/);
   });
 
   it('masks cost prices and profit margins for cashiers lacking view_cost_margin', async () => {
