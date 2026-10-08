@@ -23,6 +23,12 @@ import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
+import Category from '../src/modules/inventory/models/Category.model.js';
+import Brand from '../src/modules/inventory/models/Brand.model.js';
+import ProductModel from '../src/modules/inventory/models/ProductModel.model.js';
+import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import StockMovement from '../src/modules/inventory/models/StockMovement.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -51,6 +57,12 @@ const MODELS = {
   Cheque,
   Expense,
   LoyaltyTransaction,
+  Category,
+  Brand,
+  ProductModel,
+  Product,
+  StockLevel,
+  StockMovement,
 };
 
 async function twoShops() {
