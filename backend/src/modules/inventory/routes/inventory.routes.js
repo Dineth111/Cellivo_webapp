@@ -5,12 +5,31 @@ import { requirePermission } from '../../../core/permissions.js';
 import { wrap } from '../../../core/errors.js';
 import * as ctrl from '../controllers/inventory.controller.js';
 import * as imeiCtrl from '../controllers/imei.controller.js';
+import * as adjCtrl from '../controllers/adjustments.controller.js';
 import { requireFeature } from '../../plans/planLimits.js';
+import { requireSpecial } from '../../../core/permissions.js';
 
 const router = express.Router();
 
 // All inventory routes require auth & active subscription
 router.use(protect, subscriptionGuard);
+
+// Low stock items
+router.get('/low-stock', requirePermission('inventory.view'), wrap(adjCtrl.getLowStockItems));
+
+// CSV Import
+router.post('/products/import-csv', requirePermission('inventory.create'), wrap(adjCtrl.importProductsCsv));
+
+// Stock adjustments (Creation requires special 'adjust_stock' permission)
+router.get('/adjustments', requirePermission('inventory.view'), wrap(adjCtrl.listAdjustments));
+router.post('/adjustments', requireSpecial('adjust_stock'), wrap(adjCtrl.createAdjustment));
+
+// Stock counts (Approval requires special 'adjust_stock' permission)
+router.get('/counts', requirePermission('inventory.view'), wrap(adjCtrl.listStockCounts));
+router.post('/counts', requirePermission('inventory.create'), wrap(adjCtrl.createStockCount));
+router.get('/counts/:id', requirePermission('inventory.view'), wrap(adjCtrl.getStockCount));
+router.put('/counts/:id', requirePermission('inventory.edit'), wrap(adjCtrl.updateStockCount));
+router.post('/counts/:id/approve', requireSpecial('adjust_stock'), wrap(adjCtrl.approveStockCount));
 
 // IMEI Tracking (Gated by 'imei' plan feature)
 router.get('/imei/search', requireFeature('imei'), requirePermission('inventory.view'), wrap(imeiCtrl.searchImei));
