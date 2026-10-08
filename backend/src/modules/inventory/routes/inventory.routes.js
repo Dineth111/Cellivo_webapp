@@ -6,6 +6,7 @@ import { wrap } from '../../../core/errors.js';
 import * as ctrl from '../controllers/inventory.controller.js';
 import * as imeiCtrl from '../controllers/imei.controller.js';
 import * as adjCtrl from '../controllers/adjustments.controller.js';
+import * as barcodeCtrl from '../controllers/barcode.controller.js';
 import { requireFeature } from '../../plans/planLimits.js';
 import { requireSpecial } from '../../../core/permissions.js';
 
@@ -13,6 +14,12 @@ const router = express.Router();
 
 // All inventory routes require auth & active subscription
 router.use(protect, subscriptionGuard);
+
+// Barcode Generation & Label Printing
+router.post('/products/generate-barcode', requirePermission('inventory.create'), wrap(barcodeCtrl.generateBarcode));
+router.post('/products/:id/assign-barcode', requirePermission('inventory.edit'), wrap(barcodeCtrl.assignBarcodeToProduct));
+router.get('/labels/presets', requirePermission('inventory.view'), wrap(barcodeCtrl.getLabelPresets));
+router.post('/labels/preview', requirePermission('inventory.view'), wrap(barcodeCtrl.previewLabels));
 
 // Low stock items
 router.get('/low-stock', requirePermission('inventory.view'), wrap(adjCtrl.getLowStockItems));
