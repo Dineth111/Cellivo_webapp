@@ -29,6 +29,7 @@ import ProductModel from '../src/modules/inventory/models/ProductModel.model.js'
 import Product from '../src/modules/inventory/models/Product.model.js';
 import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
 import StockMovement from '../src/modules/inventory/models/StockMovement.model.js';
+import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -63,6 +64,7 @@ const MODELS = {
   Product,
   StockLevel,
   StockMovement,
+  SerialUnit,
 };
 
 async function twoShops() {

@@ -4,11 +4,20 @@ import { subscriptionGuard } from '../../plans/planLimits.js';
 import { requirePermission } from '../../../core/permissions.js';
 import { wrap } from '../../../core/errors.js';
 import * as ctrl from '../controllers/inventory.controller.js';
+import * as imeiCtrl from '../controllers/imei.controller.js';
+import { requireFeature } from '../../plans/planLimits.js';
 
 const router = express.Router();
 
 // All inventory routes require auth & active subscription
 router.use(protect, subscriptionGuard);
+
+// IMEI Tracking (Gated by 'imei' plan feature)
+router.get('/imei/search', requireFeature('imei'), requirePermission('inventory.view'), wrap(imeiCtrl.searchImei));
+router.get('/imei/:imei/timeline', requireFeature('imei'), requirePermission('inventory.view'), wrap(imeiCtrl.getImeiTimeline));
+router.post('/imei/:imei/reserve', requireFeature('imei'), requirePermission('inventory.view'), wrap(imeiCtrl.reserveImei));
+router.post('/imei/:imei/release', requireFeature('imei'), requirePermission('inventory.view'), wrap(imeiCtrl.releaseImei));
+router.post('/imei/:imei/status', requireFeature('imei'), requirePermission('inventory.edit'), wrap(imeiCtrl.updateImeiStatus));
 
 // Categories
 router.get('/categories', requirePermission('inventory.view'), wrap(ctrl.listCategories));
