@@ -37,6 +37,7 @@ import GoodsReceivedNote from '../src/modules/inventory/models/GoodsReceivedNote
 import SupplierBill from '../src/modules/inventory/models/SupplierBill.model.js';
 import SupplierPayment from '../src/modules/inventory/models/SupplierPayment.model.js';
 import PurchaseReturn from '../src/modules/inventory/models/PurchaseReturn.model.js';
+import StockTransfer from '../src/modules/inventory/models/StockTransfer.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -79,6 +80,7 @@ const MODELS = {
   SupplierBill,
   SupplierPayment,
   PurchaseReturn,
+  StockTransfer,
 };
 
 async function twoShops() {

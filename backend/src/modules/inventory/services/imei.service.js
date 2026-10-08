@@ -54,6 +54,7 @@ export async function transitionStatus({
   newStatus,
   cartId = null,
   branchId = null,
+  newBranchId = null,
   userId = null,
   session = null,
 }) {
@@ -101,6 +102,10 @@ export async function transitionStatus({
     } else {
       unit.status = newStatus;
       unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
+    }
+
+    if (newBranchId) {
+      unit.branchId = newBranchId;
     }
 
     await unit.save({ session });

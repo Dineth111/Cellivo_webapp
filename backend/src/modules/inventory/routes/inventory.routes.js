@@ -8,6 +8,7 @@ import * as imeiCtrl from '../controllers/imei.controller.js';
 import * as adjCtrl from '../controllers/adjustments.controller.js';
 import * as barcodeCtrl from '../controllers/barcode.controller.js';
 import * as purCtrl from '../controllers/purchasing.controller.js';
+import * as transferCtrl from '../controllers/transfer.controller.js';
 import { requireFeature } from '../../plans/planLimits.js';
 import { requireSpecial } from '../../../core/permissions.js';
 
@@ -108,5 +109,14 @@ router.post('/payments', requirePermission('purchases.create'), wrap(purCtrl.cre
 // Purchase Returns
 router.get('/purchase-returns', requirePermission('purchases.view'), wrap(purCtrl.listPurchaseReturns));
 router.post('/purchase-returns', requirePermission('purchases.create'), wrap(purCtrl.createPurchaseReturn));
+
+// Stock Transfers (F-16 / BR-02)
+router.get('/transfers', requirePermission('inventory.view'), wrap(transferCtrl.listTransfers));
+router.post('/transfers', requirePermission('inventory.create'), wrap(transferCtrl.requestTransfer));
+router.get('/transfers/:id', requirePermission('inventory.view'), wrap(transferCtrl.getTransfer));
+router.post('/transfers/:id/approve', requirePermission('inventory.approve'), wrap(transferCtrl.approveTransfer));
+router.post('/transfers/:id/dispatch', requirePermission('inventory.edit'), wrap(transferCtrl.dispatchTransfer));
+router.post('/transfers/:id/receive', requirePermission('inventory.edit'), wrap(transferCtrl.receiveTransfer));
+router.post('/transfers/:id/cancel', requirePermission('inventory.edit'), wrap(transferCtrl.cancelTransfer));
 
 export default router;
