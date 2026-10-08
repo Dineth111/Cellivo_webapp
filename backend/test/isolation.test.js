@@ -32,6 +32,11 @@ import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import Supplier from '../src/modules/inventory/models/Supplier.model.js';
 import StockAdjustment from '../src/modules/inventory/models/StockAdjustment.model.js';
 import StockCount from '../src/modules/inventory/models/StockCount.model.js';
+import PurchaseOrder from '../src/modules/inventory/models/PurchaseOrder.model.js';
+import GoodsReceivedNote from '../src/modules/inventory/models/GoodsReceivedNote.model.js';
+import SupplierBill from '../src/modules/inventory/models/SupplierBill.model.js';
+import SupplierPayment from '../src/modules/inventory/models/SupplierPayment.model.js';
+import PurchaseReturn from '../src/modules/inventory/models/PurchaseReturn.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -69,6 +74,11 @@ const MODELS = {
   Supplier,
   StockAdjustment,
   StockCount,
+  PurchaseOrder,
+  GoodsReceivedNote,
+  SupplierBill,
+  SupplierPayment,
+  PurchaseReturn,
 };
 
 async function twoShops() {

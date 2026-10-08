@@ -7,6 +7,7 @@ import * as ctrl from '../controllers/inventory.controller.js';
 import * as imeiCtrl from '../controllers/imei.controller.js';
 import * as adjCtrl from '../controllers/adjustments.controller.js';
 import * as barcodeCtrl from '../controllers/barcode.controller.js';
+import * as purCtrl from '../controllers/purchasing.controller.js';
 import { requireFeature } from '../../plans/planLimits.js';
 import { requireSpecial } from '../../../core/permissions.js';
 
@@ -76,5 +77,36 @@ router.delete('/products/:id', requirePermission('inventory.delete'), wrap(ctrl.
 // Stock levels and movements
 router.get('/stock-levels', requirePermission('inventory.view'), wrap(ctrl.listStockLevels));
 router.get('/movements', requirePermission('inventory.view'), wrap(ctrl.listMovements));
+
+// Suppliers
+router.get('/suppliers', requirePermission('purchases.view'), wrap(purCtrl.listSuppliers));
+router.post('/suppliers', requirePermission('purchases.create'), wrap(purCtrl.createSupplier));
+router.get('/suppliers/:id', requirePermission('purchases.view'), wrap(purCtrl.getSupplier));
+router.put('/suppliers/:id', requirePermission('purchases.edit'), wrap(purCtrl.updateSupplier));
+router.delete('/suppliers/:id', requirePermission('purchases.delete'), wrap(purCtrl.archiveSupplier));
+
+// Purchase Orders
+router.get('/purchase-orders', requirePermission('purchases.view'), wrap(purCtrl.listPurchaseOrders));
+router.post('/purchase-orders', requirePermission('purchases.create'), wrap(purCtrl.createPurchaseOrder));
+router.get('/purchase-orders/:id', requirePermission('purchases.view'), wrap(purCtrl.getPurchaseOrder));
+router.patch('/purchase-orders/:id/status', requirePermission('purchases.edit'), wrap(purCtrl.updatePoStatus));
+
+// Goods Received Notes (GRN)
+router.get('/grns', requirePermission('purchases.view'), wrap(purCtrl.listGrns));
+router.post('/grns', requirePermission('purchases.create'), wrap(purCtrl.createGrn));
+router.get('/grns/:id', requirePermission('purchases.view'), wrap(purCtrl.getGrn));
+
+// Supplier Bills & Ageing
+router.get('/bills', requirePermission('purchases.view'), wrap(purCtrl.listBills));
+router.get('/bills/ageing', requirePermission('purchases.view'), wrap(purCtrl.getBillsAgeing));
+router.post('/bills/reminders', requirePermission('purchases.view'), wrap(purCtrl.triggerPaymentReminders));
+
+// Supplier Payments
+router.get('/payments', requirePermission('purchases.view'), wrap(purCtrl.listPayments));
+router.post('/payments', requirePermission('purchases.create'), wrap(purCtrl.createPayment));
+
+// Purchase Returns
+router.get('/purchase-returns', requirePermission('purchases.view'), wrap(purCtrl.listPurchaseReturns));
+router.post('/purchase-returns', requirePermission('purchases.create'), wrap(purCtrl.createPurchaseReturn));
 
 export default router;
