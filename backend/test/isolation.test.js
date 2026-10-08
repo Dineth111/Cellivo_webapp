@@ -38,6 +38,8 @@ import SupplierBill from '../src/modules/inventory/models/SupplierBill.model.js'
 import SupplierPayment from '../src/modules/inventory/models/SupplierPayment.model.js';
 import PurchaseReturn from '../src/modules/inventory/models/PurchaseReturn.model.js';
 import StockTransfer from '../src/modules/inventory/models/StockTransfer.model.js';
+import WooSyncQueue from '../src/modules/inventory/models/WooSyncQueue.model.js';
+import WooSettings from '../src/modules/inventory/models/WooSettings.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -81,6 +83,8 @@ const MODELS = {
   SupplierPayment,
   PurchaseReturn,
   StockTransfer,
+  WooSyncQueue,
+  WooSettings,
 };
 
 async function twoShops() {

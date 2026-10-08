@@ -9,6 +9,7 @@ import * as adjCtrl from '../controllers/adjustments.controller.js';
 import * as barcodeCtrl from '../controllers/barcode.controller.js';
 import * as purCtrl from '../controllers/purchasing.controller.js';
 import * as transferCtrl from '../controllers/transfer.controller.js';
+import * as wooCtrl from '../controllers/woocommerce.controller.js';
 import { requireFeature } from '../../plans/planLimits.js';
 import { requireSpecial } from '../../../core/permissions.js';
 
@@ -118,5 +119,14 @@ router.post('/transfers/:id/approve', requirePermission('inventory.approve'), wr
 router.post('/transfers/:id/dispatch', requirePermission('inventory.edit'), wrap(transferCtrl.dispatchTransfer));
 router.post('/transfers/:id/receive', requirePermission('inventory.edit'), wrap(transferCtrl.receiveTransfer));
 router.post('/transfers/:id/cancel', requirePermission('inventory.edit'), wrap(transferCtrl.cancelTransfer));
+
+// WooCommerce Integration (INT-01 - gated by 'woocommerce' plan feature)
+router.get('/woocommerce/settings', requireFeature('woocommerce'), requirePermission('inventory.view'), wrap(wooCtrl.getSettings));
+router.post('/woocommerce/settings', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.updateSettings));
+router.post('/woocommerce/sync-products', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.syncProduct));
+router.post('/woocommerce/sync-stock', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.syncStock));
+router.post('/woocommerce/pull-orders', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.pullOrders));
+router.get('/woocommerce/queue', requireFeature('woocommerce'), requirePermission('inventory.view'), wrap(wooCtrl.listQueue));
+router.post('/woocommerce/queue/process', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.processQueue));
 
 export default router;
