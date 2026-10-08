@@ -226,6 +226,8 @@ function Dashboard({ user, onLogout }) {
             <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}
             </span>
+            <Link className={styles.pill} href="/inventory">Inventory</Link>
+            <Link className={styles.pill} href="/purchasing">Purchasing</Link>
             <Link className={styles.pill} href="/pos">POS Register</Link>
             <Link className={styles.pill} href="/billing">Billing</Link>
             <a className={styles.pill} href="https://support.cellivo.com" target="_blank" rel="noreferrer">Support</a>
@@ -240,9 +242,9 @@ function Dashboard({ user, onLogout }) {
                 <h2>{greeting()}, {firstName}</h2>
                 <p>Today&apos;s sales will show here once you make your first sale.</p>
                 <div className={styles.heroActions}>
-                  <button className={styles.primary} onClick={() => go('New Sale')}>+ New Sale</button>
+                  <Link className={styles.primary} href="/pos">+ New Sale</Link>
                   <button className={styles.outlineDark} onClick={() => go('Repairs')}>+ New Repair</button>
-                  <button className={styles.outlineDark} onClick={() => go('Inventory')}>+ Add Stock</button>
+                  <Link className={styles.outlineDark} href="/inventory">+ Add Stock</Link>
                 </div>
               </div>
               <div className={styles.glassRow}>
@@ -279,6 +281,26 @@ function Dashboard({ user, onLogout }) {
               </article>
             </section>
           </>
+        ) : page === 'Inventory' ? (
+          <article className={styles.card}>
+            <h3>Inventory Management</h3>
+            <p style={{ marginTop: 8, color: 'var(--secondary)' }}>
+              Manage products, barcode generation & label printing, IMEI serial tracking, stock counts, and branch transfers.
+            </p>
+            <div style={{ marginTop: 20 }}>
+              <Link className={styles.primary} href="/inventory">Open Inventory Management →</Link>
+            </div>
+          </article>
+        ) : page === 'Purchases' ? (
+          <article className={styles.card}>
+            <h3>Purchasing & Suppliers</h3>
+            <p style={{ marginTop: 8, color: 'var(--secondary)' }}>
+              Manage suppliers, purchase orders, goods received notes (GRN), bills ageing, payments, and purchase returns.
+            </p>
+            <div style={{ marginTop: 20 }}>
+              <Link className={styles.primary} href="/purchasing">Open Purchasing Management →</Link>
+            </div>
+          </article>
         ) : (
           <article className={styles.card}>
             <h3>{page}</h3>
