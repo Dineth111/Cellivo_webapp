@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup } from './api.js';
 import { runWithContext } from '../src/core/tenantContext.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
 import Customer from '../src/modules/customers/Customer.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
@@ -20,7 +20,7 @@ async function setupLoyaltyShop(email = 'loyalty-owner@shop.lk', name = 'Loyalty
   const branchId = userData.tenant.mainBranchId || userData.branchIds?.[0];
 
   await runWithContext({ tenantId }, async () => {
-    await FakeStock.create([
+    await seedStock([
       {
         branchId,
         barcode: 'BC-EARPHONES',

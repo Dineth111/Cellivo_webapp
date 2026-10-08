@@ -541,8 +541,16 @@ export async function completeSale({
       } catch (err) {
         await session.abortTransaction();
         session.endSession();
-        if ((err.errorLabels?.has?.('TransientTransactionError') || err.code === 112) && attempts < 5) {
-          await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+        const isTransient =
+          err.hasErrorLabel?.('TransientTransactionError') ||
+          err.errorLabels?.includes?.('TransientTransactionError') ||
+          err.errorLabelSet?.has?.('TransientTransactionError') ||
+          err.code === 112 ||
+          err.message?.includes('WriteConflict') ||
+          err.message?.includes('TransientTransactionError');
+
+        if (isTransient && attempts < 10) {
+          await new Promise((r) => setTimeout(r, 20 + Math.random() * 80));
           continue;
         }
         throw err;

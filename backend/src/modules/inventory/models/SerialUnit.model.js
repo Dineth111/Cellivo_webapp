@@ -39,7 +39,7 @@ const serialUnitSchema = new mongoose.Schema(
 
 serialUnitSchema.plugin(tenantPlugin);
 serialUnitSchema.index({ tenantId: 1, imei1: 1 }, { unique: true });
-serialUnitSchema.index({ tenantId: 1, imei2: 1 }, { unique: true, sparse: true });
+serialUnitSchema.index({ tenantId: 1, imei2: 1 }, { unique: true, partialFilterExpression: { imei2: { $type: 'string' } } });
 serialUnitSchema.index({ tenantId: 1, branchId: 1, status: 1 });
 serialUnitSchema.index({ tenantId: 1, productId: 1, status: 1 });
 serialUnitSchema.index({ tenantId: 1, serialNumber: 1 });

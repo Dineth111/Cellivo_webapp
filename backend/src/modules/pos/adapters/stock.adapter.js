@@ -1,5 +1,9 @@
-// TEMP: replace with Developer 4's service
-import FakeStock from '../models/FakeStock.model.js';
+import mongoose from 'mongoose';
+import Product from '../../inventory/models/Product.model.js';
+import StockLevel from '../../inventory/models/StockLevel.model.js';
+import SerialUnit from '../../inventory/models/SerialUnit.model.js';
+import * as stockService from '../../inventory/services/stock.service.js';
+import * as imeiService from '../../inventory/services/imei.service.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest } from '../../../core/errors.js';
 import { escapeRegex } from '../../../core/validate.js';
@@ -8,7 +12,32 @@ import { escapeRegex } from '../../../core/validate.js';
  * Execute a stock query within the tenant context.
  */
 async function withTenant(tenantId, fn) {
-  return await runWithContext({ tenantId }, fn);
+  const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
+  return await runWithContext({ tenantId: tid }, fn);
+}
+
+/**
+ * Helper to build product response enriched with branch stock & serials.
+ */
+async function formatProductWithStock(product, branchId, session = null) {
+  if (!product) return null;
+  const prodDoc = product.toObject ? product.toObject() : product;
+
+  const stockLevel = await StockLevel.findOne({ branchId, productId: prodDoc._id }).session(session).lean();
+  const serialUnits = await SerialUnit.find({ branchId, productId: prodDoc._id }).session(session).lean();
+
+  return {
+    ...prodDoc,
+    qty: stockLevel ? stockLevel.qty : 0,
+    costPriceCents: stockLevel ? stockLevel.averageCostCents : (prodDoc.costPriceCents || 0),
+    imeiList: serialUnits.map((su) => ({
+      imei: su.imei1,
+      imei2: su.imei2,
+      status: su.status,
+      reservedUntil: su.reservation?.reservedUntil || null,
+      cartId: su.reservation?.cartId || null,
+    })),
+  };
 }
 
 /**
@@ -16,7 +45,9 @@ async function withTenant(tenantId, fn) {
  */
 export async function lookupByBarcode(tenantId, branchId, barcode) {
   return await withTenant(tenantId, async () => {
-    return await FakeStock.findOne({ branchId, barcode });
+    const product = await Product.findOne({ barcode, isArchived: false });
+    if (!product) return null;
+    return await formatProductWithStock(product, branchId);
   });
 }
 
@@ -24,14 +55,47 @@ export async function lookupByBarcode(tenantId, branchId, barcode) {
  * Search products by name, brand, or barcode within a branch.
  */
 export async function searchProducts(tenantId, branchId, query) {
-  const text = String(query ?? '');
+  const text = String(query ?? '').trim();
   if (text.length > 100) throw badRequest('Search text is too long (max 100 characters)', 'SEARCH_TOO_LONG');
+
   return await withTenant(tenantId, async () => {
     const reg = new RegExp(escapeRegex(text), 'i');
-    return await FakeStock.find({
-      branchId,
-      $or: [{ name: reg }, { barcode: reg }, { brand: reg }],
-    }).limit(50);
+    const products = await Product.find({
+      isArchived: false,
+      $or: [{ name: reg }, { barcode: reg }, { sku: reg }],
+    })
+      .limit(50)
+      .lean();
+
+    const productIds = products.map((p) => p._id);
+    const [stockLevels, serialUnits] = await Promise.all([
+      StockLevel.find({ branchId, productId: { $in: productIds } }).lean(),
+      SerialUnit.find({ branchId, productId: { $in: productIds } }).lean(),
+    ]);
+
+    const stockMap = new Map(stockLevels.map((s) => [String(s.productId), s]));
+    const serialMap = new Map();
+    serialUnits.forEach((su) => {
+      const pid = String(su.productId);
+      if (!serialMap.has(pid)) serialMap.set(pid, []);
+      serialMap.get(pid).push({
+        imei: su.imei1,
+        imei2: su.imei2,
+        status: su.status,
+        reservedUntil: su.reservation?.reservedUntil || null,
+        cartId: su.reservation?.cartId || null,
+      });
+    });
+
+    return products.map((p) => {
+      const sl = stockMap.get(String(p._id));
+      return {
+        ...p,
+        qty: sl ? sl.qty : 0,
+        costPriceCents: sl ? sl.averageCostCents : p.costPriceCents,
+        imeiList: serialMap.get(String(p._id)) || [],
+      };
+    });
   });
 }
 
@@ -40,37 +104,41 @@ export async function searchProducts(tenantId, branchId, query) {
  */
 export async function lookupImei(tenantId, branchId, imei) {
   return await withTenant(tenantId, async () => {
-    const stock = await FakeStock.findOne({
+    const unit = await SerialUnit.findOne({
       branchId,
-      'imeiList.imei': imei,
-    });
-    if (!stock) return null;
-    const item = stock.imeiList.find((i) => i.imei === imei);
-    return { product: stock, imeiItem: item };
+      $or: [{ imei1: imei }, { imei2: imei }],
+    })
+      .populate('productId')
+      .lean();
+
+    if (!unit || !unit.productId) return null;
+
+    const product = unit.productId;
+    const stockLevel = await StockLevel.findOne({ branchId, productId: product._id }).lean();
+
+    return {
+      product: {
+        ...product,
+        qty: stockLevel ? stockLevel.qty : 0,
+        costPriceCents: unit.unitCostCents || stockLevel?.averageCostCents || product.costPriceCents,
+      },
+      imeiItem: {
+        imei: unit.imei1,
+        imei2: unit.imei2,
+        status: unit.status,
+        reservedUntil: unit.reservation?.reservedUntil || null,
+        cartId: unit.reservation?.cartId || null,
+      },
+    };
   });
 }
 
 /**
  * Reserve an IMEI for an active POS cart/session (default 15 minutes).
  */
-export async function reserveImei(tenantId, branchId, imei, minutes = 15) {
+export async function reserveImei(tenantId, branchId, imei, minutes = 15, cartId = null) {
   return await withTenant(tenantId, async () => {
-    const stock = await FakeStock.findOne({ branchId, 'imeiList.imei': imei });
-    if (!stock) throw badRequest(`IMEI ${imei} not found at this branch`);
-
-    const item = stock.imeiList.find((i) => i.imei === imei);
-    const now = new Date();
-    if (item.status === 'sold') {
-      throw badRequest(`IMEI ${imei} is already sold`);
-    }
-    if (item.status === 'reserved' && item.reservedUntil && item.reservedUntil > now) {
-      throw badRequest(`IMEI ${imei} is already reserved by another transaction`);
-    }
-
-    item.status = 'reserved';
-    item.reservedUntil = new Date(Date.now() + minutes * 60 * 1000);
-    await stock.save();
-    return { success: true, imei, reservedUntil: item.reservedUntil };
+    return await imeiService.reserveImei(tenantId, branchId, imei, cartId, minutes);
   });
 }
 
@@ -79,52 +147,79 @@ export async function reserveImei(tenantId, branchId, imei, minutes = 15) {
  */
 export async function releaseImei(tenantId, branchId, imei) {
   return await withTenant(tenantId, async () => {
-    const stock = await FakeStock.findOne({ branchId, 'imeiList.imei': imei });
-    if (!stock) return { success: false };
-
-    const item = stock.imeiList.find((i) => i.imei === imei);
-    if (item && item.status === 'reserved') {
-      item.status = 'in_stock';
-      item.reservedUntil = null;
-      await stock.save();
-    }
-    return { success: true, imei };
+    return await imeiService.releaseImei(tenantId, branchId, imei);
   });
 }
 
 /**
  * Deduct stock upon sale completion.
- * Throws code 'V-05' if insufficient stock.
+ * Throws code 'V-05' if insufficient stock or IMEI unavailable.
  */
-export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, session = null) {
+export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, session = null, cartId = null) {
   return await withTenant(tenantId, async () => {
     // 1. Try finding by IMEI first
-    let stock = await FakeStock.findOne({ branchId, 'imeiList.imei': barcodeOrImei }).session(session);
-    if (stock) {
-      const item = stock.imeiList.find((i) => i.imei === barcodeOrImei);
-      if (!item || item.status === 'sold') {
+    const unit = await SerialUnit.findOne({
+      branchId,
+      $or: [{ imei1: barcodeOrImei }, { imei2: barcodeOrImei }],
+    }).session(session);
+
+    if (unit) {
+      const now = new Date();
+      if (unit.status === 'sold') {
         throw badRequest(`IMEI ${barcodeOrImei} is no longer available`, 'V-05');
       }
-      item.status = 'sold';
-      item.reservedUntil = null;
-      stock.qty = Math.max(0, stock.qty - 1);
-      await stock.save({ session });
-      return { success: true, product: stock, deductedQty: 1, imei: barcodeOrImei };
+      if (unit.status === 'reserved' && unit.reservation?.reservedUntil > now) {
+        if (cartId && unit.reservation.cartId && unit.reservation.cartId !== cartId) {
+          throw badRequest(`IMEI ${barcodeOrImei} is no longer available`, 'V-05');
+        }
+      }
+
+      unit.status = 'sold';
+      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
+      await unit.save({ session });
+
+      const { stockLevel } = await stockService.adjustStockLevel({
+        tenantId,
+        productId: unit.productId,
+        branchId,
+        type: 'sale',
+        qtyChange: -1,
+        unitCostCents: unit.unitCostCents,
+        referenceType: 'sale',
+        imei: barcodeOrImei,
+        session,
+      });
+
+      const product = await Product.findById(unit.productId).session(session).lean();
+      return {
+        success: true,
+        product: { ...product, qty: stockLevel.qty, costPriceCents: unit.unitCostCents || stockLevel.averageCostCents },
+        deductedQty: 1,
+        imei: barcodeOrImei,
+      };
     }
 
     // 2. Otherwise find by barcode
-    stock = await FakeStock.findOne({ branchId, barcode: barcodeOrImei }).session(session);
-    if (!stock) {
+    const product = await Product.findOne({ barcode: barcodeOrImei, isArchived: false }).session(session);
+    if (!product) {
       throw badRequest(`Product with barcode ${barcodeOrImei} not found at this branch`, 'V-05');
     }
 
-    if (stock.qty < qty) {
-      throw badRequest(`Only ${stock.qty} left at this branch. Reduce the quantity or transfer stock.`, 'V-05');
-    }
+    const { stockLevel } = await stockService.adjustStockLevel({
+      tenantId,
+      productId: product._id,
+      branchId,
+      type: 'sale',
+      qtyChange: -qty,
+      referenceType: 'sale',
+      session,
+    });
 
-    stock.qty -= qty;
-    await stock.save({ session });
-    return { success: true, product: stock, deductedQty: qty };
+    return {
+      success: true,
+      product: { ...product.toObject(), qty: stockLevel.qty, costPriceCents: stockLevel.averageCostCents },
+      deductedQty: qty,
+    };
   });
 }
 
@@ -133,23 +228,55 @@ export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, se
  */
 export async function restockReturn(tenantId, branchId, barcodeOrImei, qty = 1, session = null) {
   return await withTenant(tenantId, async () => {
-    let stock = await FakeStock.findOne({ branchId, 'imeiList.imei': barcodeOrImei }).session(session);
-    if (stock) {
-      const item = stock.imeiList.find((i) => i.imei === barcodeOrImei);
-      if (item) {
-        item.status = 'in_stock';
-        item.reservedUntil = null;
-      }
-      stock.qty += 1;
-      await stock.save({ session });
-      return { success: true, product: stock, restockedQty: 1 };
+    // Try IMEI first
+    const unit = await SerialUnit.findOne({
+      branchId,
+      $or: [{ imei1: barcodeOrImei }, { imei2: barcodeOrImei }],
+    }).session(session);
+
+    if (unit) {
+      unit.status = 'in_stock';
+      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
+      await unit.save({ session });
+
+      const { stockLevel } = await stockService.adjustStockLevel({
+        tenantId,
+        productId: unit.productId,
+        branchId,
+        type: 'sale_return',
+        qtyChange: 1,
+        unitCostCents: unit.unitCostCents,
+        referenceType: 'return',
+        imei: barcodeOrImei,
+        session,
+      });
+
+      const product = await Product.findById(unit.productId).session(session).lean();
+      return {
+        success: true,
+        product: { ...product, qty: stockLevel.qty, costPriceCents: unit.unitCostCents || stockLevel.averageCostCents },
+        restockedQty: 1,
+      };
     }
 
-    stock = await FakeStock.findOne({ branchId, barcode: barcodeOrImei }).session(session);
-    if (stock) {
-      stock.qty += qty;
-      await stock.save({ session });
-      return { success: true, product: stock, restockedQty: qty };
+    // Otherwise barcode
+    const product = await Product.findOne({ barcode: barcodeOrImei, isArchived: false }).session(session);
+    if (product) {
+      const { stockLevel } = await stockService.adjustStockLevel({
+        tenantId,
+        productId: product._id,
+        branchId,
+        type: 'sale_return',
+        qtyChange: qty,
+        referenceType: 'return',
+        session,
+      });
+
+      return {
+        success: true,
+        product: { ...product.toObject(), qty: stockLevel.qty, costPriceCents: stockLevel.averageCostCents },
+        restockedQty: qty,
+      };
     }
 
     return { success: false, message: 'Item not found in stock to restock' };
@@ -161,26 +288,70 @@ export async function restockReturn(tenantId, branchId, barcodeOrImei, qty = 1, 
  */
 export async function addTradeIn(tenantId, branchId, tradeInData, session = null) {
   return await withTenant(tenantId, async () => {
-    const { imei, modelName, valuationCents, condition, notes } = tradeInData;
-    let stock = await FakeStock.findOne({ branchId, barcode: `TRADEIN-${imei || Date.now()}` }).session(session);
-    if (!stock) {
-      stock = new FakeStock({
-        branchId,
-        barcode: `TRADEIN-${imei || Date.now()}`,
-        name: `Trade-in: ${modelName || 'Device'} (${condition || 'Used'})`,
-        category: 'Trade-in',
-        brand: tradeInData.brand || 'Unknown',
-        sellingPriceCents: valuationCents,
-        costPriceCents: valuationCents,
-        qty: 1,
-        imeiList: imei ? [{ imei, status: 'in_stock', reservedUntil: null }] : [],
-      });
-    } else {
-      stock.qty += 1;
-      if (imei) stock.imeiList.push({ imei, status: 'in_stock', reservedUntil: null });
+    const { imei, modelName, valuationCents, condition, brand, notes } = tradeInData;
+    const barcode = `TRADEIN-${imei || Date.now()}`;
+
+    let product = await Product.findOne({ barcode }).session(session);
+    if (!product) {
+      const createdProds = await Product.create(
+        [
+          {
+            name: `Trade-in: ${modelName || 'Device'} (${condition || 'Used'})`,
+            barcode,
+            sellingPriceCents: valuationCents,
+            costPriceCents: valuationCents,
+            isSerialised: !!imei,
+            description: notes || '',
+          },
+        ],
+        { session }
+      );
+      product = createdProds[0];
     }
-    await stock.save({ session });
-    return stock;
+
+    if (imei) {
+      let unit = await SerialUnit.findOne({ imei1: imei }).session(session);
+      if (!unit) {
+        await SerialUnit.create(
+          [
+            {
+              imei1: imei,
+              productId: product._id,
+              branchId,
+              unitCostCents: valuationCents,
+              status: 'in_stock',
+            },
+          ],
+          { session }
+        );
+      } else {
+        unit.status = 'in_stock';
+        unit.branchId = branchId;
+        await unit.save({ session });
+      }
+    }
+
+    const { stockLevel } = await stockService.adjustStockLevel({
+      tenantId,
+      productId: product._id,
+      branchId,
+      type: 'trade_in',
+      qtyChange: 1,
+      unitCostCents: valuationCents,
+      referenceType: 'trade_in',
+      imei: imei || '',
+      session,
+    });
+
+    return {
+      _id: product._id,
+      barcode: product.barcode,
+      name: product.name,
+      sellingPriceCents: product.sellingPriceCents,
+      costPriceCents: product.costPriceCents,
+      qty: stockLevel.qty,
+      imeiList: imei ? [{ imei, status: 'in_stock' }] : [],
+    };
   });
 }
 
@@ -193,29 +364,42 @@ export async function removeTradeIn(tenantId, branchId, imeiOrBarcode, session =
     const alreadySold = () =>
       badRequest(`Traded-in device ${imeiOrBarcode} was already sold. Process a return instead of a void.`, 'CANNOT_VOID_TRADEIN_SOLD');
 
-    let stock = await FakeStock.findOne({ branchId, 'imeiList.imei': imeiOrBarcode }).session(session);
-    if (stock) {
-      if (stock.imeiList.find((i) => i.imei === imeiOrBarcode).status === 'sold') throw alreadySold();
-      stock.imeiList = stock.imeiList.filter((i) => i.imei !== imeiOrBarcode);
-    } else {
-      stock = await FakeStock.findOne({ branchId, barcode: imeiOrBarcode }).session(session);
-      if (!stock || stock.qty < 1) throw alreadySold();
-    }
-    stock.qty = Math.max(0, stock.qty - 1);
-    await stock.save({ session });
-    return { success: true, product: stock };
-  });
-}
+    const unit = await SerialUnit.findOne({
+      branchId,
+      $or: [{ imei1: imeiOrBarcode }, { imei2: imeiOrBarcode }],
+    }).session(session);
 
-/**
- * Get product cost in cents by barcode or IMEI.
- */
-export async function getCost(tenantId, barcodeOrImei) {
-  return await withTenant(tenantId, async () => {
-    const stock = await FakeStock.findOne({
-      $or: [{ barcode: barcodeOrImei }, { 'imeiList.imei': barcodeOrImei }],
+    if (unit) {
+      if (unit.status === 'sold') throw alreadySold();
+      await SerialUnit.deleteOne({ _id: unit._id }).session(session);
+      await stockService.adjustStockLevel({
+        tenantId,
+        productId: unit.productId,
+        branchId,
+        type: 'trade_in_void',
+        qtyChange: -1,
+        session,
+      });
+      const product = await Product.findById(unit.productId).session(session).lean();
+      return { success: true, product };
+    }
+
+    const product = await Product.findOne({ barcode: imeiOrBarcode }).session(session);
+    if (!product) throw alreadySold();
+
+    const stockLevel = await StockLevel.findOne({ branchId, productId: product._id }).session(session);
+    if (!stockLevel || stockLevel.qty < 1) throw alreadySold();
+
+    await stockService.adjustStockLevel({
+      tenantId,
+      productId: product._id,
+      branchId,
+      type: 'trade_in_void',
+      qtyChange: -1,
+      session,
     });
-    return stock ? stock.costPriceCents : 0;
+
+    return { success: true, product: product.toObject() };
   });
 }
 
@@ -229,5 +413,4 @@ export default {
   restockReturn,
   addTradeIn,
   removeTradeIn,
-  getCost,
 };

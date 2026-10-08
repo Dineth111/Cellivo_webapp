@@ -29,7 +29,7 @@ const productSchema = new mongoose.Schema(
 
 productSchema.plugin(tenantPlugin);
 productSchema.index({ tenantId: 1, barcode: 1 }, { unique: true });
-productSchema.index({ tenantId: 1, sku: 1 }, { unique: true, sparse: true });
+productSchema.index({ tenantId: 1, sku: 1 }, { unique: true, partialFilterExpression: { sku: { $type: 'string', $gt: '' } } });
 productSchema.index({ tenantId: 1, name: 1 });
 productSchema.index({ tenantId: 1, isSerialised: 1 });
 

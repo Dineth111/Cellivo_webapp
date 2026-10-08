@@ -4,7 +4,10 @@ import bcrypt from 'bcryptjs';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
+import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import CreditNote from '../src/modules/pos/models/CreditNote.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
@@ -27,7 +30,7 @@ async function setupReturnShop(email = 'returns@shop.lk', name = 'Returns Shop')
 
   // Seed stock
   await runWithContext({ tenantId }, async () => {
-    await FakeStock.create([
+    await seedStock([
       {
         branchId,
         barcode: 'BC-PHONE-RET',
@@ -139,12 +142,15 @@ describe('Phase 5: Returns, Exchanges, Trade-Ins, and Wholesale (F-10)', () => {
 
     // Verify stock deducted
     const stockAfterSale = await runWithContext({ tenantId: shop.tenantId }, async () => {
-      const phone = await FakeStock.findOne({ barcode: 'BC-PHONE-RET' });
-      const cable = await FakeStock.findOne({ barcode: 'BC-ACC-RET' });
-      return { phone, cable };
+      const phone = await Product.findOne({ barcode: 'BC-PHONE-RET' });
+      const cable = await Product.findOne({ barcode: 'BC-ACC-RET' });
+      const phoneStock = await StockLevel.findOne({ productId: phone._id });
+      const cableStock = await StockLevel.findOne({ productId: cable._id });
+      const phoneUnit = await SerialUnit.findOne({ imei1: VALID_IMEI });
+      return { phone: { ...phone.toObject(), qty: phoneStock.qty }, cable: { ...cable.toObject(), qty: cableStock.qty }, phoneUnit };
     });
     expect(stockAfterSale.cable.qty).toBe(8); // 10 - 2
-    expect(stockAfterSale.phone.imeiList.find((i) => i.imei === VALID_IMEI).status).toBe('sold');
+    expect(stockAfterSale.phoneUnit.status).toBe('sold');
 
     // 2. Lookup invoice for return
     const lookupRes = await api('get', `/api/pos/returns/lookup/${invoice.invoiceNumber}`, shop.token);
@@ -176,7 +182,8 @@ describe('Phase 5: Returns, Exchanges, Trade-Ins, and Wholesale (F-10)', () => {
 
     // Check restocked quantity
     const cableStockAfterReturn = await runWithContext({ tenantId: shop.tenantId }, async () => {
-      return await FakeStock.findOne({ barcode: 'BC-ACC-RET' });
+      const cable = await Product.findOne({ barcode: 'BC-ACC-RET' });
+      return await StockLevel.findOne({ productId: cable._id });
     });
     expect(cableStockAfterReturn.qty).toBe(9); // 8 + 1 restocked
 
@@ -227,10 +234,10 @@ describe('Phase 5: Returns, Exchanges, Trade-Ins, and Wholesale (F-10)', () => {
     expect(invAfterFullReturn.status).toBe('returned');
 
     // Phone IMEI is back in stock
-    const phoneStockAfterFullReturn = await runWithContext({ tenantId: shop.tenantId }, async () => {
-      return await FakeStock.findOne({ barcode: 'BC-PHONE-RET' });
+    const phoneUnitAfterFullReturn = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await SerialUnit.findOne({ imei1: VALID_IMEI });
     });
-    expect(phoneStockAfterFullReturn.imeiList.find((i) => i.imei === VALID_IMEI).status).toBe('in_stock');
+    expect(phoneUnitAfterFullReturn.status).toBe('in_stock');
   });
 
   it('rejects return if items are damaged (does not restock damaged goods) and validates quantity boundaries', async () => {
@@ -253,7 +260,8 @@ describe('Phase 5: Returns, Exchanges, Trade-Ins, and Wholesale (F-10)', () => {
 
     // Stock should NOT increase for damaged item
     const stock = await runWithContext({ tenantId: shop.tenantId }, async () => {
-      return await FakeStock.findOne({ barcode: 'BC-ACC-RET' });
+      const cable = await Product.findOne({ barcode: 'BC-ACC-RET' });
+      return await StockLevel.findOne({ productId: cable._id });
     });
     expect(stock.qty).toBe(8); // stayed 8 (did not increase to 9)
 

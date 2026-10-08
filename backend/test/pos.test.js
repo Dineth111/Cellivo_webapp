@@ -3,7 +3,10 @@ import bcrypt from 'bcryptjs';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup, addStaff, addBranch } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
+import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
@@ -33,7 +36,7 @@ async function setupShop(email = 'pos-f09@shop.lk', name = 'POS Shop') {
 
   // Seed inventory for this shop
   await runWithContext({ tenantId }, async () => {
-    await FakeStock.create([
+    await seedStock([
       {
         branchId,
         barcode: 'BC-PHONE-1',
@@ -170,7 +173,8 @@ describe('POS Sale Backend (F-09) Engine', () => {
 
     // Verify stock was deducted only ONCE
     await runWithContext({ tenantId: shop.tenantId }, async () => {
-      const stock = await FakeStock.findOne({ barcode: 'BC-PHONE-1' });
+      const prod = await Product.findOne({ barcode: 'BC-PHONE-1' });
+      const stock = await StockLevel.findOne({ productId: prod._id });
       expect(stock.qty).toBe(9); // from 10 down to 9 (not 8)
     });
   });
@@ -421,7 +425,8 @@ describe('POS Sale Backend (F-09) Engine', () => {
 
     // Verify stock was restored
     await runWithContext({ tenantId: shopA.tenantId }, async () => {
-      const stock = await FakeStock.findOne({ barcode: 'BC-CASE-1' });
+      const prod = await Product.findOne({ barcode: 'BC-CASE-1' });
+      const stock = await StockLevel.findOne({ productId: prod._id });
       expect(stock.qty).toBe(3); // restored back to 3
     });
   });
@@ -573,7 +578,7 @@ describe('POS review fixes', () => {
     const shop = await setupShop('branch-numbers@shop.lk', 'Branch Numbers Shop');
     const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'COL-' });
     await runWithContext({ tenantId: shop.tenantId }, async () =>
-      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 10 })
+      seedStock({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 10 })
     );
     const sell = (branchId) =>
       api('post', '/api/pos/checkout', shop.token)
@@ -826,7 +831,7 @@ describe('POS review fixes, round 2', () => {
     const manager = await addStaff(shop, 'branch_manager', 'manager-return@shop.lk'); // branch A only
     const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'B2-' });
     await runWithContext({ tenantId: shop.tenantId }, async () =>
-      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 5 })
+      seedStock({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 5 })
     );
     const saleB = await api('post', '/api/pos/checkout', shop.token)
       .set('x-branch-id', String(branchB._id))
@@ -857,7 +862,7 @@ describe('POS review fixes, round 2', () => {
         customerNic: '200012345678',
         payments: [{ method: 'cash', amountCents: 4000 }],
       });
-    const stockWith = (imei) => runWithContext({ tenantId: shop.tenantId }, async () => FakeStock.findOne({ 'imeiList.imei': imei }).lean());
+    const stockWith = (imei) => runWithContext({ tenantId: shop.tenantId }, async () => SerialUnit.findOne({ $or: [{ imei1: imei }, { imei2: imei }] }).lean());
     const voidIt = (id) => api('post', `/api/pos/invoices/${id}/void`, shop.token).send({ reason: 'Wrong sale' });
 
     const first = await tradeInSale('490154203237518');

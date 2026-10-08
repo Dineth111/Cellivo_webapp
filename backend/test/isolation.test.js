@@ -10,7 +10,6 @@ import Session from '../src/modules/auth/Session.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerAccount from '../src/modules/pos/models/LedgerAccount.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
 import InvoiceSequence from '../src/modules/pos/models/InvoiceSequence.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
@@ -30,6 +29,7 @@ import Product from '../src/modules/inventory/models/Product.model.js';
 import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
 import StockMovement from '../src/modules/inventory/models/StockMovement.model.js';
 import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
+import Supplier from '../src/modules/inventory/models/Supplier.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -45,7 +45,6 @@ const MODELS = {
   AuditLog,
   LedgerAccount,
   LedgerEntry,
-  FakeStock,
   InvoiceSequence,
   Invoice,
   Payment,
@@ -65,6 +64,7 @@ const MODELS = {
   StockLevel,
   StockMovement,
   SerialUnit,
+  Supplier,
 };
 
 async function twoShops() {
