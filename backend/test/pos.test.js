@@ -919,8 +919,9 @@ describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
     ];
 
     // Create serial units for each non-sellable status
-    for (const status of nonSellableStatuses) {
-      const imei = `3580000000000${status.slice(0, 2).toUpperCase()}`;
+    for (let i = 0; i < nonSellableStatuses.length; i++) {
+      const status = nonSellableStatuses[i];
+      const imei = `35800000000000${i}`;
       await runWithContext({ tenantId }, async () => {
         await SerialUnit.create({
           tenantId,
