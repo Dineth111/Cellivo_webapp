@@ -3,6 +3,9 @@ import SerialUnit from '../models/SerialUnit.model.js';
 import Product from '../models/Product.model.js';
 import Supplier from '../models/Supplier.model.js';
 import StockMovement from '../models/StockMovement.model.js';
+import * as stockService from './stock.service.js';
+import * as ledgerService from '../../pos/services/ledger.service.js';
+import { record as recordAudit } from '../../../core/audit.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound } from '../../../core/errors.js';
 import { escapeRegex } from '../../../core/validate.js';
@@ -28,13 +31,13 @@ export function validateImei(imei, fieldName = 'IMEI') {
  */
 export const ALLOWED_TRANSITIONS = {
   in_stock: ['reserved', 'sold', 'in_transit', 'with_supplier', 'written_off', 'in_repair'],
-  reserved: ['in_stock', 'sold'],
+  reserved: ['in_stock', 'sold', 'written_off', 'with_supplier', 'in_repair', 'in_transit'],
   sold: ['returned'],
   in_transit: ['in_stock'],
   returned: ['in_stock', 'written_off', 'with_supplier'],
   with_supplier: ['in_stock', 'written_off'],
   in_repair: ['in_stock', 'written_off'],
-  written_off: [],
+  written_off: ['in_stock'],
 };
 
 /**
@@ -56,6 +59,7 @@ export async function transitionStatus({
   branchId = null,
   newBranchId = null,
   userId = null,
+  reason = null,
   session = null,
 }) {
   return await withTenant(tenantId, async () => {
@@ -90,8 +94,8 @@ export async function transitionStatus({
       };
     } else if (newStatus === 'sold') {
       if (currentStatus === 'reserved' && unit.reservation?.reservedUntil > now) {
-        if (cartId && unit.reservation.cartId && unit.reservation.cartId !== cartId) {
-          throw badRequest(`IMEI ${imei} is reserved by another cart`);
+        if (!cartId || unit.reservation.cartId !== cartId) {
+          throw badRequest(`IMEI ${imei} is reserved by another cart`, 'V-05');
         }
       }
       unit.status = 'sold';
@@ -109,6 +113,94 @@ export async function transitionStatus({
     }
 
     await unit.save({ session });
+
+    // Stock level adjustments and ledger postings
+    const leavingSellable = ['in_stock', 'reserved'].includes(currentStatus) &&
+      ['written_off', 'with_supplier', 'in_repair', 'in_transit'].includes(newStatus);
+
+    const returningToSellable = ['written_off', 'with_supplier', 'in_repair', 'in_transit'].includes(currentStatus) &&
+      newStatus === 'in_stock';
+
+    let unitCost = unit.unitCostCents || 0;
+    if (!unitCost) {
+      const prod = await Product.findById(unit.productId).session(session).lean();
+      unitCost = prod?.costPriceCents || 0;
+    }
+
+    if (leavingSellable) {
+      await stockService.adjustStockLevel({
+        tenantId,
+        productId: unit.productId,
+        branchId: unit.branchId,
+        type: 'adjustment_loss',
+        qtyChange: -1,
+        unitCostCents: unitCost,
+        referenceType: 'stock_adjustment',
+        referenceId: imei,
+        note: reason || `Status change: ${newStatus}`,
+        userId,
+        session,
+      });
+
+      if (newStatus === 'written_off' && unitCost > 0) {
+        await ledgerService.postJournal({
+          tenantId,
+          branchId: unit.branchId,
+          referenceType: 'stock_adjustment',
+          referenceId: imei,
+          description: `IMEI ${imei} written off`,
+          lines: [
+            { accountCode: '5040', debit: unitCost, credit: 0 },
+            { accountCode: '1050', debit: 0, credit: unitCost },
+          ],
+          createdBy: userId,
+          session,
+        });
+      }
+    } else if (returningToSellable) {
+      await stockService.adjustStockLevel({
+        tenantId,
+        productId: unit.productId,
+        branchId: unit.branchId,
+        type: 'adjustment_gain',
+        qtyChange: 1,
+        unitCostCents: unitCost,
+        referenceType: 'stock_adjustment',
+        referenceId: imei,
+        note: reason || `Status change: in_stock from ${currentStatus}`,
+        userId,
+        session,
+      });
+
+      if (currentStatus === 'written_off' && unitCost > 0) {
+        await ledgerService.postJournal({
+          tenantId,
+          branchId: unit.branchId,
+          referenceType: 'stock_adjustment',
+          referenceId: imei,
+          description: `IMEI ${imei} restored from written_off to in_stock`,
+          lines: [
+            { accountCode: '1050', debit: unitCost, credit: 0 },
+            { accountCode: '5040', debit: 0, credit: unitCost },
+          ],
+          createdBy: userId,
+          session,
+        });
+      }
+    }
+
+    if (reason) {
+      await recordAudit({
+        action: 'inventory.imei_status',
+        entity: 'SerialUnit',
+        entityId: unit._id,
+        before: { status: currentStatus },
+        after: { status: newStatus, reason },
+        tenantId,
+        userId,
+      });
+    }
+
     return unit;
   });
 }

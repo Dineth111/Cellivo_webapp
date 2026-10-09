@@ -5,6 +5,9 @@ import * as imeiService from '../src/modules/inventory/services/imei.service.js'
 import * as stockService from '../src/modules/inventory/services/stock.service.js';
 import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import AuditLog from '../src/modules/audit/AuditLog.model.js';
+import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import { runWithContext } from '../src/core/tenantContext.js';
 
 beforeAll(startDb);
@@ -342,3 +345,107 @@ describe('F-07 IMEI Search & Life-History Timeline', () => {
     expect(timeRes.body.data.movements[1].type).toBe('sale');
   });
 });
+
+describe('Dev 4 review: 3. Status changes move stock & post ledger', () => {
+  it('write-off lowers stock level, posts Dr 5040/Cr 1050, requires reason and audits; POS cannot sell by barcode; return to stock reverses', async () => {
+    const shop = await setupShop('status-stock@shop.lk', 'Status Stock Shop');
+    const imei = makeValidImei('35222200333333');
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Write-off Device',
+      barcode: 'BC-WRITEOFF-1',
+      isSerialised: true,
+      sellingPriceCents: 5000000,
+      costPriceCents: 3000000,
+    })).body.data;
+
+    // Seed stock of 1 unit
+    await stockService.adjustStockLevel({
+      tenantId: shop.tenantId,
+      productId: prod._id,
+      branchId: shop.branchId,
+      type: 'initial',
+      qtyChange: 1,
+      unitCostCents: 3000000,
+    });
+
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId: shop.tenantId,
+        imei1: imei,
+        productId: prod._id,
+        branchId: shop.branchId,
+        unitCostCents: 3000000,
+        status: 'in_stock',
+      });
+    });
+
+    // 1. Manual status change without reason -> 400 Bad Request
+    const noReasonRes = await api('post', `/api/inventory/imei/${imei}/status`, shop.token).send({
+      status: 'written_off',
+    });
+    expect(noReasonRes.status).toBe(400);
+
+    // 2. Manual status change with reason -> 200 OK
+    const writeOffRes = await api('post', `/api/inventory/imei/${imei}/status`, shop.token).send({
+      status: 'written_off',
+      reason: 'Water damage during storage',
+    });
+    expect(writeOffRes.status).toBe(200);
+
+    // StockLevel.qty lowered from 1 to 0
+    const slAfterWriteOff = await stockService.getStockLevel(shop.tenantId, shop.branchId, prod._id);
+    expect(slAfterWriteOff.qty).toBe(0);
+
+    // Ledger posted Dr 5040 / Cr 1050 for 3000000 cents
+    const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceId: imei }).lean();
+    });
+    expect(entries.length).toBeGreaterThan(0);
+    const writeOffEntry = entries[0];
+    const drLine = writeOffEntry.lines.find((l) => l.accountCode === '5040');
+    const crLine = writeOffEntry.lines.find((l) => l.accountCode === '1050');
+    expect(drLine.debit).toBe(3000000);
+    expect(crLine.credit).toBe(3000000);
+
+    // Audited as inventory.imei_status with reason and before/after
+    const auditLogs = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await AuditLog.find({ action: 'inventory.imei_status', entityId: writeOffRes.body.data._id }).lean();
+    });
+    expect(auditLogs.length).toBe(1);
+    expect(auditLogs[0].before.status).toBe('in_stock');
+    expect(auditLogs[0].after.status).toBe('written_off');
+    expect(auditLogs[0].after.reason).toBe('Water damage during storage');
+
+    // POS cannot sell the written-off unit by barcode (stock qty is 0)
+    const sellRes = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [{ barcode: 'BC-WRITEOFF-1', qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(sellRes.status).toBe(400);
+    expect(sellRes.body.code).toBe('V-05');
+
+    // 3. Bring unit back to in_stock
+    const backRes = await api('post', `/api/inventory/imei/${imei}/status`, shop.token).send({
+      status: 'in_stock',
+      reason: 'Recovered and repaired',
+    });
+    expect(backRes.status).toBe(200);
+
+    // StockLevel.qty increased back to 1
+    const slAfterBack = await stockService.getStockLevel(shop.tenantId, shop.branchId, prod._id);
+    expect(slAfterBack.qty).toBe(1);
+
+    // Ledger posted Dr 1050 / Cr 5040 for 3000000 cents
+    const allEntries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceId: imei }).sort({ createdAt: -1 }).lean();
+    });
+    expect(allEntries.length).toBe(2);
+    const reverseEntry = allEntries[0];
+    const revDrLine = reverseEntry.lines.find((l) => l.accountCode === '1050');
+    const revCrLine = reverseEntry.lines.find((l) => l.accountCode === '5040');
+    expect(revDrLine.debit).toBe(3000000);
+    expect(revCrLine.credit).toBe(3000000);
+  });
+});
+

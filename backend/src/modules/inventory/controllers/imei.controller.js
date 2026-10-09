@@ -50,7 +50,9 @@ export async function updateImeiStatus(req, res) {
   const imei = str(req.params.imei);
   const newStatus = str(req.body.status);
   const cartId = str(req.body.cartId);
+  const reason = str(req.body.reason);
   if (!newStatus) throw badRequest('New status is required');
+  if (!reason || !reason.trim()) throw badRequest('Reason is required', 'REASON_REQUIRED');
 
   const branch = await resolveBranch(req, { allowAll: true });
   const updated = await imeiService.transitionStatus({
@@ -60,6 +62,7 @@ export async function updateImeiStatus(req, res) {
     cartId,
     branchId: branch ? branch._id : null,
     userId: req.auth.userId,
+    reason,
   });
 
   res.json({ success: true, data: maskCost(updated, req.auth.role) });
