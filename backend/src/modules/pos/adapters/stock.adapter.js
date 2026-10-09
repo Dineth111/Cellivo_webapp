@@ -164,14 +164,12 @@ export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, se
     }).session(session);
 
     if (unit) {
-      const now = new Date();
-      if (unit.status === 'sold') {
-        throw badRequest(`IMEI ${barcodeOrImei} is no longer available`, 'V-05');
-      }
-      if (unit.status === 'reserved' && unit.reservation?.reservedUntil > now) {
-        if (cartId && unit.reservation.cartId && unit.reservation.cartId !== cartId) {
-          throw badRequest(`IMEI ${barcodeOrImei} is no longer available`, 'V-05');
+      if (unit.status === 'reserved') {
+        if (!cartId || unit.reservation?.cartId !== cartId) {
+          throw badRequest(`IMEI ${barcodeOrImei} is reserved by another cart`, 'V-05');
         }
+      } else if (unit.status !== 'in_stock') {
+        throw badRequest(`IMEI ${barcodeOrImei} is not sellable (status: ${unit.status})`, 'V-05');
       }
 
       unit.status = 'sold';

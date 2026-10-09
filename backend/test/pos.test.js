@@ -16,6 +16,7 @@ import { posEvents, cleanAllExpiredHeldCarts } from '../src/modules/pos/services
 import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
+import * as stockAdapter from '../src/modules/pos/adapters/stock.adapter.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -883,3 +884,116 @@ describe('POS review fixes, round 2', () => {
     expect(blocked.body.code).toBe('CANNOT_VOID_TRADEIN_SOLD');
   });
 });
+
+describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
+  it('deductStock sells only units that are in_stock, or reserved with a matching cartId; throws 400 V-05 on every non-sellable status', async () => {
+    const shop = await setupShop('sellable-status@shop.lk', 'Sellable Status Shop');
+    const { tenantId, branchId } = shop;
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Status Test Phone',
+      barcode: 'PHONE-STATUS',
+      isSerialised: true,
+      sellingPriceCents: 5000000,
+      costPriceCents: 3000000,
+    })).body.data;
+
+    // Seed stock level of 10
+    await runWithContext({ tenantId }, async () => {
+      await StockLevel.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        qty: 10,
+        averageCostCents: 3000000,
+      });
+    });
+
+    const nonSellableStatuses = [
+      'sold',
+      'in_transit',
+      'returned',
+      'with_supplier',
+      'written_off',
+      'in_repair',
+    ];
+
+    // Create serial units for each non-sellable status
+    for (const status of nonSellableStatuses) {
+      const imei = `3580000000000${status.slice(0, 2).toUpperCase()}`;
+      await runWithContext({ tenantId }, async () => {
+        await SerialUnit.create({
+          tenantId,
+          branchId,
+          productId: prod._id,
+          imei1: imei,
+          status,
+          unitCostCents: 3000000,
+        });
+      });
+
+      // Try deducting each non-sellable status -> 400 V-05
+      await expect(
+        stockAdapter.deductStock(tenantId, branchId, imei, 1, null, null)
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'V-05',
+      });
+    }
+
+    // Reserved unit:
+    const reservedImei = '3580000000000RS';
+    await runWithContext({ tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: reservedImei,
+        status: 'reserved',
+        unitCostCents: 3000000,
+        reservation: {
+          cartId: 'CART-CORRECT',
+          reservedUntil: new Date(Date.now() + 15 * 60 * 1000),
+        },
+      });
+    });
+
+    // 1. Reserved with missing cartId -> 400 V-05
+    await expect(
+      stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, null)
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'V-05',
+    });
+
+    // 2. Reserved with wrong cartId -> 400 V-05
+    await expect(
+      stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, 'CART-WRONG')
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'V-05',
+    });
+
+    // 3. Reserved with matching cartId -> succeeds
+    const reservedSuccess = await stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, 'CART-CORRECT');
+    expect(reservedSuccess.success).toBe(true);
+    expect(reservedSuccess.deductedQty).toBe(1);
+
+    // in_stock unit -> succeeds
+    const inStockImei = '3580000000000OK';
+    await runWithContext({ tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: inStockImei,
+        status: 'in_stock',
+        unitCostCents: 3000000,
+      });
+    });
+    const inStockSuccess = await stockAdapter.deductStock(tenantId, branchId, inStockImei, 1, null, null);
+    expect(inStockSuccess.success).toBe(true);
+    expect(inStockSuccess.deductedQty).toBe(1);
+  });
+});
+
