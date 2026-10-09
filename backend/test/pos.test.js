@@ -963,7 +963,7 @@ describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
     await expect(
       stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, null)
     ).rejects.toMatchObject({
-      statusCode: 400,
+      status: 400,
       code: 'V-05',
     });
 
@@ -971,7 +971,7 @@ describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
     await expect(
       stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, 'CART-WRONG')
     ).rejects.toMatchObject({
-      statusCode: 400,
+      status: 400,
       code: 'V-05',
     });
 
@@ -997,4 +997,72 @@ describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
     expect(inStockSuccess.deductedQty).toBe(1);
   });
 });
+
+describe('Dev 4 review: 2. Reservations (cart isolation)', () => {
+  it('cart B cannot sell a unit cart A reserved via holdCart / POS checkout', async () => {
+    const shop = await setupShop('cart-reservations@shop.lk', 'Reservation Shop');
+    const { tenantId, branchId } = shop;
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Reserved Phone',
+      barcode: 'PHONE-RES',
+      isSerialised: true,
+      sellingPriceCents: 5000000,
+      costPriceCents: 3000000,
+    })).body.data;
+
+    const imei = '359000000000001';
+    await runWithContext({ tenantId }, async () => {
+      await StockLevel.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        qty: 1,
+        averageCostCents: 3000000,
+      });
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: imei,
+        status: 'in_stock',
+        unitCostCents: 3000000,
+      });
+    });
+
+    // Cart A holds the cart with this IMEI
+    const holdRes = await api('post', '/api/pos/cart/hold', shop.token).send({
+      cartName: 'Cart A',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1, unitPriceCents: 5000000 }],
+      cartId: 'CART-A',
+    });
+    expect(holdRes.status).toBe(201);
+
+    // Cart B attempts to checkout with the same IMEI -> refused 400 V-05
+    const cartBRes = await api('post', '/api/pos/checkout', shop.token).send({
+      cartId: 'CART-B',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(cartBRes.status).toBe(400);
+    expect(cartBRes.body.code).toBe('V-05');
+
+    // Cart B checkout without cartId -> also refused 400 V-05
+    const noCartRes = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(noCartRes.status).toBe(400);
+    expect(noCartRes.body.code).toBe('V-05');
+
+    // Cart A completes sale -> 201 Created
+    const cartARes = await api('post', '/api/pos/checkout', shop.token).send({
+      cartId: 'CART-A',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(cartARes.status).toBe(201);
+  });
+});
+
 

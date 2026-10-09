@@ -94,7 +94,7 @@ router.post(
   requirePermission('pos.create'),
   wrap(async (req, res) => {
     const branchId = (await resolveBranch(req))._id;
-    const { cartName, customer, lines, discounts } = req.body;
+    const { cartName, customer, lines, discounts, cartId } = req.body;
 
     const held = await saleService.holdCart({
       tenantId: req.auth.tenantId,
@@ -104,6 +104,7 @@ router.post(
       lines,
       discounts,
       heldBy: req.auth.userId,
+      cartId,
     });
 
     res.status(201).json({

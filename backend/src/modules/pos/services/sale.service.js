@@ -380,8 +380,9 @@ export async function completeSale({
         const invoiceNumber = await InvoiceSequence.getNextNumber(tid, bid, invoicePrefix, session);
 
         // Deduct stock for all lines
+        const resolvedCartId = data.cartId || (data.heldCartId ? String(data.heldCartId) : null) || idempotencyKey || null;
         for (const line of processedLines) {
-          await stockAdapter.deductStock(tid, bid, line.imei || line.barcode || line.productId, line.qty, session);
+          await stockAdapter.deductStock(tid, bid, line.imei || line.barcode || line.productId, line.qty, session, resolvedCartId);
         }
 
         // Add trade-in device to stock if present
@@ -700,19 +701,10 @@ export async function voidInvoice({
 /**
  * Holds a cart and reserves any IMEI lines for 15 minutes.
  */
-export async function holdCart({ tenantId, branchId, cartName = 'Held Cart', customer, lines, discounts, heldBy }) {
+export async function holdCart({ tenantId, branchId, cartName = 'Held Cart', customer, lines, discounts, heldBy, cartId = null }) {
   const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
 
   return await runWithContext({ tenantId: tid }, async () => {
-    // Reserve IMEIs for 15 minutes
-    if (Array.isArray(lines)) {
-      for (const l of lines) {
-        if (l.imei) {
-          await stockAdapter.reserveImei(tid, branchId, l.imei, 15);
-        }
-      }
-    }
-
     const held = new HeldCart({
       branchId,
       cartName,
@@ -722,6 +714,17 @@ export async function holdCart({ tenantId, branchId, cartName = 'Held Cart', cus
       heldBy,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
     });
+
+    const effectiveCartId = cartId || (held._id ? held._id.toString() : null);
+
+    // Reserve IMEIs for 15 minutes
+    if (Array.isArray(lines)) {
+      for (const l of lines) {
+        if (l.imei) {
+          await stockAdapter.reserveImei(tid, branchId, l.imei, 15, effectiveCartId);
+        }
+      }
+    }
 
     await held.save();
     return held;
