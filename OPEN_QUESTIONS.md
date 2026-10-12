@@ -42,3 +42,15 @@ Each item states the safe default that was implemented. Confirm or change.
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
+
+## Customers review (Dev 5)
+
+29. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
+30. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
+31. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
+   - Does NOT change `customerSnapshot` on `Invoice` documents, preserving historical customer details at time of sale.
+   - Does NOT touch `LedgerEntry` records (Dev 3's financial ledger remains an immutable double-entry log).
+   - Skips `HeldCart` (in-progress transient carts are discarded or left to expire).
+   - Self-merges, merges into archived/merged customers, circular merges, and cross-tenant merges are rejected with 400 or 404.
+32. **Customer history scope.** `GET /api/customers/:id/history` aggregates invoices, payments, credit notes, installment plans, and loyalty transactions. Repairs and devices owned are currently returned as empty arrays until Dev 4 repair and inventory modules are introduced.
+

@@ -14,11 +14,17 @@ const customerSchema = new mongoose.Schema(
     currentBalanceCents: { type: Number, default: 0, min: 0 },
     loyaltyPoints: { type: Number, default: 0, min: 0 },
     notes: { type: String, default: '' },
+    tags: { type: [String], default: [] },
+    marketingOptIn: { type: Boolean, default: false },
     isArchived: { type: Boolean, default: false },
+    mergedInto: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },
   },
   { timestamps: true }
 );
 customerSchema.plugin(tenantPlugin);
 customerSchema.index({ tenantId: 1, phone: 1 }, { unique: true }); // FRS F-13: phone unique within tenant
+customerSchema.index({ tenantId: 1, isArchived: 1, createdAt: -1 });
+customerSchema.index({ tenantId: 1, email: 1 });
+customerSchema.index({ tenantId: 1, nic: 1 });
 
 export default mongoose.models.Customer || mongoose.model('Customer', customerSchema);

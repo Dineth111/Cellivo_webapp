@@ -23,6 +23,7 @@ import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
+import LoyaltySettings from '../src/modules/customers/LoyaltySettings.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -51,6 +52,7 @@ const MODELS = {
   Cheque,
   Expense,
   LoyaltyTransaction,
+  LoyaltySettings,
 };
 
 async function twoShops() {
