@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { config, assertConfig } from './core/config.js';
 import connectDB from './core/db.js';
+import { landingHtml } from './core/landing.js';
 import { errorHandler, notFoundHandler } from './core/errors.js';
 import healthRoutes from './modules/health/health.routes.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -34,17 +35,16 @@ export function createApp() {
   app.use(express.urlencoded({ extended: true, limit: '100kb' }));
   if (config.isDev) app.use(morgan('dev'));
 
-  app.get('/', (req, res) =>
-    res.json({
-      message: 'Cellivo API is running',
-      version: '1.0.0',
-      endpoints: {
-        health: '/api/health', auth: '/api/auth', users: '/api/users', roles: '/api/roles',
-        branches: '/api/branches', audit: '/api/audit', customers: '/api/customers',
-        billing: '/api/billing', signup: '/api/signup', public: '/api/public', admin: '/api/admin',
-      },
-    })
-  );
+  const index = {
+    message: 'Cellivo API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health', auth: '/api/auth', users: '/api/users', roles: '/api/roles',
+      branches: '/api/branches', audit: '/api/audit', customers: '/api/customers',
+      billing: '/api/billing', signup: '/api/signup', public: '/api/public', admin: '/api/admin',
+    },
+  };
+  app.get('/', (req, res) => (req.accepts(['json', 'html']) === 'html' ? res.send(landingHtml(index)) : res.json(index)));
 
   app.use('/api/health', healthRoutes);
   app.use(
