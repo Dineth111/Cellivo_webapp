@@ -370,7 +370,7 @@ export async function completeSale({
     let savedPayments = [];
     let attempts = 0;
 
-    while (attempts < 5) {
+    while (attempts < 10) {
       attempts++;
       const session = await mongoose.startSession();
       session.startTransaction();
@@ -541,8 +541,13 @@ export async function completeSale({
       } catch (err) {
         await session.abortTransaction();
         session.endSession();
-        if ((err.errorLabels?.has?.('TransientTransactionError') || err.code === 112) && attempts < 5) {
-          await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+        const isTransient =
+          err.hasErrorLabel?.('TransientTransactionError') ||
+          err.errorLabelSet?.has?.('TransientTransactionError') ||
+          err.errorLabels?.includes?.('TransientTransactionError') ||
+          err.code === 112;
+        if (isTransient && attempts < 10) {
+          await new Promise((r) => setTimeout(r, 30 * attempts + Math.random() * 50));
           continue;
         }
         throw err;

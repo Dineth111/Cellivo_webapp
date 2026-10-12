@@ -3,10 +3,10 @@ import tenantPlugin from '../../core/tenantPlugin.js';
 
 const loyaltySettingsSchema = new mongoose.Schema(
   {
-    pointsPerHundredRupees: { type: Number, default: 1, min: 0 },
-    valuePerPointCents: { type: Number, default: 100, min: 0 },
-    minRedemptionPoints: { type: Number, default: 100, min: 0 },
-    expiryDays: { type: Number, default: 365, min: 0 },
+    pointsPerHundredRupees: { type: Number, default: 1, min: 0, max: 1000 },
+    valuePerPointCents: { type: Number, default: 100, min: 0, max: 10000 },
+    minRedemptionPoints: { type: Number, default: 100, min: 0, max: 1000000 },
+    expiryDays: { type: Number, default: 365, min: 0, max: 3650 },
   },
   { timestamps: true }
 );

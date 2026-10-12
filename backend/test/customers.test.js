@@ -11,6 +11,7 @@ import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.mod
 import Quotation from '../src/modules/pos/models/Quotation.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
+import { normalizePhone } from '../src/modules/customers/utils/phone.js';
 import { getLoyaltySettings, DEFAULT_LOYALTY_SETTINGS } from '../src/modules/pos/adapters/loyaltySettings.adapter.js';
 
 beforeAll(startDb);
@@ -24,6 +25,20 @@ async function setupShop(email = 'owner@cellivo.lk', shopName = 'Cellivo Shop') 
   const branchId = me.body.data.tenant.mainBranchId || me.body.data.branchIds?.[0];
   return { ...shop, tenantId, branchId };
 }
+
+describe('normalizePhone unit tests (Review item 4)', () => {
+  it('correctly handles international, local, spaces, 00 prefixes and rejects invalid inputs', () => {
+    expect(normalizePhone('abc')).toBe('');
+    expect(normalizePhone('+xyz')).toBe('');
+    expect(normalizePhone('0094771234567')).toBe('+94771234567');
+    expect(normalizePhone('077 123 4567')).toBe('+94771234567');
+    expect(normalizePhone('+94771234567')).toBe('+94771234567');
+    expect(normalizePhone('0771234567')).toBe('+94771234567');
+    expect(normalizePhone('+14155552671')).toBe('+14155552671');
+    expect(normalizePhone('')).toBe('');
+    expect(normalizePhone(null)).toBe('');
+  });
+});
 
 describe('Customer Management (F-13)', () => {
   it('creates customer with phone normalised on write and marketingOptIn default to false', async () => {
@@ -52,6 +67,16 @@ describe('Customer Management (F-13)', () => {
     expect(directDoc.marketingOptIn).toBe(false);
   });
 
+  it('rejects invalid phone numbers matching /^\+[1-9]\d{7,14}$/ requirement', async () => {
+    const shop = await setupShop();
+
+    const res = await api('post', '/api/customers', shop.token).send({
+      name: 'Invalid Phone Guy',
+      phone: 'abc',
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('rejects duplicate phone within tenant with 409 and returns existing customer data', async () => {
     const shop = await setupShop();
 
@@ -72,6 +97,30 @@ describe('Customer Management (F-13)', () => {
     expect(duplicate.body.data).toBeDefined();
     expect(duplicate.body.data._id).toBe(first.body.data._id);
     expect(duplicate.body.data.name).toBe('Customer 1');
+  });
+
+  it('checks archived customers on phone duplicate check with explicit message', async () => {
+    const shop = await setupShop();
+
+    const first = (
+      await api('post', '/api/customers', shop.token).send({
+        name: 'Archived Customer',
+        phone: '0778889900',
+      })
+    ).body.data;
+
+    // Archive customer
+    await api('delete', `/api/customers/${first._id}`, shop.token);
+
+    // Attempt to create another customer with the same phone
+    const res = await api('post', '/api/customers', shop.token).send({
+      name: 'New Customer Colliding with Archived',
+      phone: '0778889900',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DUPLICATE_PHONE');
+    expect(res.body.message).toContain('archived');
   });
 
   it('masks phone and NIC in customer list but provides unmasked in GET /:id', async () => {
@@ -100,10 +149,29 @@ describe('Customer Management (F-13)', () => {
     expect(singleRes.body.data.nic).toBe('951234567V'); // Unmasked
   });
 
-  it('detects duplicate groups via GET /api/customers/duplicates', async () => {
+  it('supports partial and last-digits search for phone numbers', async () => {
     const shop = await setupShop();
 
-    // Insert 2 customers with same NIC or email
+    await api('post', '/api/customers', shop.token).send({
+      name: 'Search Test',
+      phone: '0771234567',
+    });
+
+    // Search by last 4 digits
+    const resLastDigits = await api('get', '/api/customers?search=4567', shop.token);
+    expect(resLastDigits.status).toBe(200);
+    expect(resLastDigits.body.count).toBe(1);
+    expect(resLastDigits.body.data[0].name).toBe('Search Test');
+
+    // Search by prefix 077
+    const resPrefix = await api('get', '/api/customers?search=077', shop.token);
+    expect(resPrefix.status).toBe(200);
+    expect(resPrefix.body.count).toBe(1);
+  });
+
+  it('detects duplicate groups via GET /api/customers/duplicates using aggregation', async () => {
+    const shop = await setupShop();
+
     await api('post', '/api/customers', shop.token).send({
       name: 'Duplicate Alpha',
       phone: '0771111111',
@@ -190,6 +258,20 @@ describe('CSV Import (F-13)', () => {
     expect(list.body.total).toBe(2);
   });
 
+  it('reports error if CSV file ends inside an open quote (Review item 10)', async () => {
+    const shop = await setupShop();
+
+    const brokenCsv = 'name,phone,notes\nIncomplete Customer,0771234567,"Unclosed quote notes';
+
+    const res = await api('post', '/api/customers/import', shop.token)
+      .set('Content-Type', 'text/csv')
+      .send(brokenCsv);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CSV_VALIDATION_ERROR');
+    expect(res.body.data?.errors[0].message).toContain('open quote');
+  });
+
   it('all-or-nothing: rejects entire CSV on row validation error with per-row errors', async () => {
     const shop = await setupShop();
 
@@ -214,13 +296,18 @@ describe('CSV Import (F-13)', () => {
     expect(list.body.total).toBe(0);
   });
 
-  it('rejects CSV if phone already exists in the database', async () => {
+  it('rejects CSV if phone exists in active OR archived database records (Review item 3)', async () => {
     const shop = await setupShop();
 
-    await api('post', '/api/customers', shop.token).send({
-      name: 'Existing Guy',
-      phone: '0779998877',
-    });
+    const existing = (
+      await api('post', '/api/customers', shop.token).send({
+        name: 'Archived Guy',
+        phone: '0779998877',
+      })
+    ).body.data;
+
+    // Archive it
+    await api('delete', `/api/customers/${existing._id}`, shop.token);
 
     const csvData = [
       'name,phone,email',
@@ -234,10 +321,11 @@ describe('CSV Import (F-13)', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('DUPLICATE_PHONE_IN_CSV');
+    expect(res.body.data?.errors[0].message).toContain('archived');
 
     // Verify New Guy was NOT inserted
     const list = await api('get', '/api/customers', shop.token);
-    expect(list.body.total).toBe(1);
+    expect(list.body.total).toBe(0); // 1 archived, 0 active
   });
 });
 
@@ -285,7 +373,7 @@ describe('Customer Merge (F-13)', () => {
     expect(intoMerged.status).toBe(400);
   });
 
-  it('atomically reassigns POS references, preserves customerSnapshot, leaves LedgerEntry untouched', async () => {
+  it('atomically reassigns POS references and handles concurrent balance changes via $inc (Review item 2)', async () => {
     const shop = await setupShop();
 
     const c1 = (
@@ -400,7 +488,6 @@ describe('Customer Merge (F-13)', () => {
         maturityDate: new Date(),
       });
 
-      // Immutable LedgerEntry for customer
       await LedgerEntry.create({
         entryNumber: 'LE-001',
         date: new Date(),
@@ -411,6 +498,11 @@ describe('Customer Merge (F-13)', () => {
           { accountCode: '4010', accountName: 'Sales Revenue', debit: 0, credit: 50 },
         ],
       });
+    });
+
+    // Concurrently adjust target balance before merge executes to test $inc atomicity
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await Customer.updateOne({ _id: c2._id }, { $inc: { currentBalanceCents: 2000 } });
     });
 
     // Execute merge
@@ -447,9 +539,9 @@ describe('Customer Merge (F-13)', () => {
       const leCount = await LedgerEntry.countDocuments();
       expect(leCount).toBe(1);
 
-      // 4. Target balances combined
+      // 4. Target balances combined via $inc (10000 + 2000 concurrent + 5000 from source = 17000)
       const updatedTarget = await Customer.findById(c2._id).lean();
-      expect(updatedTarget.currentBalanceCents).toBe(15000); // 5000 + 10000
+      expect(updatedTarget.currentBalanceCents).toBe(17000);
       expect(updatedTarget.loyaltyPoints).toBe(150); // 100 + 50
       expect(updatedTarget.creditLimitCents).toBe(20000); // Math.max(20000, 15000)
       expect(updatedTarget.tags).toEqual(expect.arrayContaining(['tag1', 'tag2']));
@@ -467,6 +559,54 @@ describe('Customer Merge (F-13)', () => {
 });
 
 describe('Loyalty Settings & Adapter (F-13)', () => {
+  it('requires settings.view and settings.edit permissions (Review item 6)', async () => {
+    const shop = await setupShop();
+    const cashier = await addStaff(shop, 'cashier', 'cashier-loyalty@cellivo.lk');
+
+    // Cashier does not have settings permissions
+    const getRes = await api('get', '/api/customers/loyalty-settings', cashier.token);
+    expect(getRes.status).toBe(403);
+
+    const putRes = await api('put', '/api/customers/loyalty-settings', cashier.token).send({
+      pointsPerHundredRupees: 2,
+    });
+    expect(putRes.status).toBe(403);
+  });
+
+  it('validates settings with Number.isFinite and caps (Review item 6)', async () => {
+    const shop = await setupShop();
+
+    // Rejects non-finite values
+    const nanRes = await api('put', '/api/customers/loyalty-settings', shop.token).send({
+      pointsPerHundredRupees: 'invalid-not-a-number',
+    });
+    expect(nanRes.status).toBe(400);
+
+    // Rejects pointsPerHundredRupees > 1000
+    const overPoints = await api('put', '/api/customers/loyalty-settings', shop.token).send({
+      pointsPerHundredRupees: 1001,
+    });
+    expect(overPoints.status).toBe(400);
+
+    // Rejects valuePerPointCents > 10000
+    const overValue = await api('put', '/api/customers/loyalty-settings', shop.token).send({
+      valuePerPointCents: 10001,
+    });
+    expect(overValue.status).toBe(400);
+
+    // Rejects minRedemptionPoints > 1000000
+    const overMin = await api('put', '/api/customers/loyalty-settings', shop.token).send({
+      minRedemptionPoints: 1000001,
+    });
+    expect(overMin.status).toBe(400);
+
+    // Rejects expiryDays > 3650
+    const overExpiry = await api('put', '/api/customers/loyalty-settings', shop.token).send({
+      expiryDays: 3651,
+    });
+    expect(overExpiry.status).toBe(400);
+  });
+
   it('gets defaults when no settings exist, updates settings via PUT, and adapter reads them', async () => {
     const shop = await setupShop();
 
@@ -504,21 +644,70 @@ describe('Loyalty Settings & Adapter (F-13)', () => {
 });
 
 describe('Customer History (F-13)', () => {
-  it('returns customer history with POS records and enforces tenant isolation', async () => {
-    const shopA = await setupShop('shop-ha@cellivo.lk', 'History Shop A');
-    const shopB = await setupShop('shop-hb@cellivo.lk', 'History Shop B');
+  it('masks cost prices for cashier but reveals for owner in getCustomerHistory (Review item 1)', async () => {
+    const shop = await setupShop();
+    const cashier = await addStaff(shop, 'cashier', 'cashier-history@cellivo.lk');
 
-    const customerA = (
-      await api('post', '/api/customers', shopA.token).send({
+    const customer = (
+      await api('post', '/api/customers', shop.token).send({
         name: 'History Customer',
         phone: '0779991122',
       })
     ).body.data;
 
     let invoiceId;
-    await runWithContext({ tenantId: shopA.tenantId }, async () => {
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
       const inv = await Invoice.create({
         invoiceNumber: 'INV-HIST-001',
+        customerId: customer._id,
+        branchId: shop.branchId,
+        cashierId: shop.user._id,
+        subtotalCents: 10000,
+        grandTotalCents: 10000,
+        totalPaidCents: 10000,
+        lines: [
+          {
+            name: 'Phone Case',
+            qty: 1,
+            unitPriceCents: 10000,
+            costPriceCents: 6000,
+            grossCents: 10000,
+            netCents: 10000,
+            lineTotalCents: 10000,
+          },
+        ],
+      });
+      invoiceId = inv._id;
+    });
+
+    // 1. Query as Cashier: costPriceCents MUST BE MASKED
+    const cashierHist = await api('get', `/api/customers/${customer._id}/history`, cashier.token);
+    expect(cashierHist.status).toBe(200);
+    const cashierLine = cashierHist.body.data.invoices[0].lines[0];
+    expect(cashierLine.costPriceCents).toBeUndefined();
+
+    // 2. Query as Owner: costPriceCents is present
+    const ownerHist = await api('get', `/api/customers/${customer._id}/history`, shop.token);
+    expect(ownerHist.status).toBe(200);
+    const ownerLine = ownerHist.body.data.invoices[0].lines[0];
+    expect(ownerLine.costPriceCents).toBe(6000);
+  });
+
+  it('returns customer history with POS records and enforces tenant isolation', async () => {
+    const shopA = await setupShop('shop-ha@cellivo.lk', 'History Shop A');
+    const shopB = await setupShop('shop-hb@cellivo.lk', 'History Shop B');
+
+    const customerA = (
+      await api('post', '/api/customers', shopA.token).send({
+        name: 'History Isolation Customer',
+        phone: '0779991133',
+      })
+    ).body.data;
+
+    let invoiceId;
+    await runWithContext({ tenantId: shopA.tenantId }, async () => {
+      const inv = await Invoice.create({
+        invoiceNumber: 'INV-HIST-002',
         customerId: customerA._id,
         branchId: shopA.branchId,
         cashierId: shopA.user._id,

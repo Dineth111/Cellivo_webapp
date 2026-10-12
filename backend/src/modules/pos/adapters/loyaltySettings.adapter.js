@@ -33,7 +33,8 @@ export async function getLoyaltySettings(tenantId) {
       minRedemptionPoints: settings.minRedemptionPoints ?? DEFAULT_LOYALTY_SETTINGS.minRedemptionPoints,
       expiryDays: settings.expiryDays ?? DEFAULT_LOYALTY_SETTINGS.expiryDays,
     };
-  } catch {
+  } catch (err) {
+    console.error('[getLoyaltySettings]', err);
     return { ...DEFAULT_LOYALTY_SETTINGS };
   }
 }

@@ -9,8 +9,8 @@ const router = express.Router();
 router.use(protect, subscriptionGuard);
 
 // 1. Specific collection-level routes (MUST be declared before /:id)
-router.get('/loyalty-settings', requirePermission('customers.view'), wrap(c.getLoyaltySettingsController));
-router.put('/loyalty-settings', requirePermission('customers.edit'), wrap(c.updateLoyaltySettingsController));
+router.get('/loyalty-settings', requirePermission('settings.view'), wrap(c.getLoyaltySettingsController));
+router.put('/loyalty-settings', requirePermission('settings.edit'), wrap(c.updateLoyaltySettingsController));
 router.get('/duplicates', requirePermission('customers.view'), wrap(c.getDuplicates));
 router.post(
   '/import',

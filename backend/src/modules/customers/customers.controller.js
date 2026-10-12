@@ -9,6 +9,9 @@ import Payment from '../pos/models/Payment.model.js';
 import Quotation from '../pos/models/Quotation.model.js';
 import { reassignCustomerData } from './adapters/reassign.adapter.js';
 import { DEFAULT_LOYALTY_SETTINGS } from '../pos/adapters/loyaltySettings.adapter.js';
+import { maskCostMargins } from '../pos/services/sale.service.js';
+import { hasSpecial } from '../../core/permissions.js';
+import { getContext } from '../../core/tenantContext.js';
 import { conflict, notFound, badRequest, AppError } from '../../core/errors.js';
 import { str, pick, requireId, escapeRegex, pageParams } from '../../core/validate.js';
 import { normalizePhone, phoneVariants } from './utils/phone.js';
@@ -18,17 +21,26 @@ import audit from '../../core/audit.js';
 
 const FIELDS = ['name', 'phone', 'email', 'address', 'nic', 'type', 'notes', 'tags', 'marketingOptIn'];
 
-// Clean and whitelist string / array / boolean fields from req.body
+// Clean and whitelist string / array / boolean fields from req.body with length limits
 const clean = (body) => {
   const p = pick(body, FIELDS);
   const out = {};
   for (const [k, v] of Object.entries(p)) {
     if (k === 'tags' && Array.isArray(v)) {
-      out.tags = v.map((t) => String(t).trim()).filter((t) => t.length > 0 && t.length <= 50);
+      out.tags = v
+        .map((t) => String(t).trim().slice(0, 50))
+        .filter((t) => t.length > 0)
+        .slice(0, 20);
     } else if (k === 'marketingOptIn') {
       out.marketingOptIn = v === true;
     } else if (typeof v === 'string') {
-      out[k] = v.trim();
+      const trimmed = v.trim();
+      if (k === 'name') out.name = trimmed.slice(0, 100);
+      else if (k === 'email') out.email = trimmed.slice(0, 254);
+      else if (k === 'address') out.address = trimmed.slice(0, 300);
+      else if (k === 'nic') out.nic = trimmed.slice(0, 20);
+      else if (k === 'notes') out.notes = trimmed.slice(0, 2000);
+      else out[k] = trimmed;
     }
   }
   return out;
@@ -36,13 +48,16 @@ const clean = (body) => {
 
 async function duplicatePhone(phone, exceptId) {
   const variants = phoneVariants(phone);
+  // Check both active and archived records
   const existing = await Customer.findOne({
     phone: { $in: variants },
-    isArchived: false,
     ...(exceptId && { _id: { $ne: exceptId } }),
   });
   if (!existing) return;
-  const err = new AppError(409, 'A customer with this phone number already exists', 'DUPLICATE_PHONE');
+  const message = existing.isArchived
+    ? 'A customer with this phone number exists in archived records'
+    : 'A customer with this phone number already exists';
+  const err = new AppError(409, message, 'DUPLICATE_PHONE');
   err.data = existing;
   throw err;
 }
@@ -58,12 +73,21 @@ export const getCustomers = async (req, res) => {
   if (search) {
     const re = { $regex: escapeRegex(search), $options: 'i' };
     const variants = phoneVariants(search);
-    filter.$or = [
+    const orBranches = [
       { name: re },
-      { phone: { $in: variants.length ? variants : [re] } },
+      { phone: re },
       { email: re },
       { nic: re },
     ];
+    if (variants.length > 0) {
+      orBranches.push({ phone: { $in: variants } });
+      for (const v of variants) {
+        if (v !== search) {
+          orBranches.push({ phone: { $regex: escapeRegex(v), $options: 'i' } });
+        }
+      }
+    }
+    filter.$or = orBranches;
   }
 
   const type = str(req.query.type);
@@ -109,7 +133,11 @@ export const createCustomer = async (req, res) => {
   if (!data.name) throw badRequest('Customer name is required');
   if (!data.phone) throw badRequest('Phone number is required');
 
-  data.phone = normalizePhone(data.phone);
+  const normalized = normalizePhone(data.phone);
+  if (!normalized) {
+    throw badRequest('Invalid phone number format. Must match E.164 (e.g. 0771234567, +94771234567)');
+  }
+  data.phone = normalized;
   await duplicatePhone(data.phone);
 
   const customer = await Customer.create(data);
@@ -124,8 +152,13 @@ export const updateCustomer = async (req, res) => {
   requireId(req.params.id);
   const data = clean(req.body);
 
-  if (data.phone) {
-    data.phone = normalizePhone(data.phone);
+  if (data.phone !== undefined) {
+    if (!data.phone) throw badRequest('Phone number is required');
+    const normalized = normalizePhone(data.phone);
+    if (!normalized) {
+      throw badRequest('Invalid phone number format. Must match E.164 (e.g. 0771234567, +94771234567)');
+    }
+    data.phone = normalized;
     await duplicatePhone(data.phone, req.params.id);
   }
 
@@ -153,66 +186,63 @@ export const deleteCustomer = async (req, res) => {
 };
 
 /**
- * Find likely duplicates across active customers (same normalised phone, NIC, or email).
+ * Find likely duplicates across active customers using aggregation (max 200 groups).
  */
 export const getDuplicates = async (req, res) => {
-  const customers = await Customer.find({ isArchived: false }).lean();
-  const phoneMap = new Map();
-  const nicMap = new Map();
-  const emailMap = new Map();
+  const [phoneDups, nicDups, emailDups] = await Promise.all([
+    Customer.aggregate([
+      { $match: { isArchived: false, phone: { $exists: true, $ne: '' } } },
+      { $group: { _id: '$phone', count: { $sum: 1 }, ids: { $push: '$_id' } } },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 200 },
+    ]),
+    Customer.aggregate([
+      { $match: { isArchived: false, nic: { $exists: true, $ne: '' } } },
+      { $group: { _id: '$nic', count: { $sum: 1 }, ids: { $push: '$_id' } } },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 200 },
+    ]),
+    Customer.aggregate([
+      { $match: { isArchived: false, email: { $exists: true, $ne: '' } } },
+      { $group: { _id: '$email', count: { $sum: 1 }, ids: { $push: '$_id' } } },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 200 },
+    ]),
+  ]);
 
-  for (const c of customers) {
-    const normPhone = normalizePhone(c.phone);
-    if (normPhone) {
-      const list = phoneMap.get(normPhone) || [];
-      list.push(c);
-      phoneMap.set(normPhone, list);
-    }
-    const cleanNic = (c.nic || '').trim().toUpperCase();
-    if (cleanNic) {
-      const list = nicMap.get(cleanNic) || [];
-      list.push(c);
-      nicMap.set(cleanNic, list);
-    }
-    const cleanEmail = (c.email || '').trim().toLowerCase();
-    if (cleanEmail) {
-      const list = emailMap.get(cleanEmail) || [];
-      list.push(c);
-      emailMap.set(cleanEmail, list);
-    }
+  const allIds = new Set();
+  const rawGroups = [];
+
+  for (const g of phoneDups) {
+    g.ids.forEach((id) => allIds.add(id));
+    rawGroups.push({ reason: 'duplicate_phone', matchedKey: g._id, count: g.count, ids: g.ids });
+  }
+  for (const g of nicDups) {
+    g.ids.forEach((id) => allIds.add(id));
+    rawGroups.push({ reason: 'duplicate_nic', matchedKey: g._id, count: g.count, ids: g.ids });
+  }
+  for (const g of emailDups) {
+    g.ids.forEach((id) => allIds.add(id));
+    rawGroups.push({ reason: 'duplicate_email', matchedKey: g._id, count: g.count, ids: g.ids });
   }
 
-  const duplicateGroups = [];
-  const seenGroupKeys = new Set();
+  const cappedGroups = rawGroups.slice(0, 200);
+  const matchedDocs = await Customer.find({ _id: { $in: Array.from(allIds) } }).lean();
+  const docMap = new Map(matchedDocs.map((d) => [String(d._id), d]));
 
-  function addGroup(reason, matchedKey, list) {
-    if (list.length < 2) return;
-    const ids = list.map((c) => String(c._id)).sort().join(':');
-    const groupKey = `${reason}:${ids}`;
-    if (seenGroupKeys.has(groupKey)) return;
-    seenGroupKeys.add(groupKey);
-
-    duplicateGroups.push({
-      reason,
-      matchedKey,
-      count: list.length,
-      customers: list.map((c) => ({
+  const duplicateGroups = cappedGroups.map((g) => ({
+    reason: g.reason,
+    matchedKey: g.matchedKey,
+    count: g.count,
+    customers: g.ids
+      .map((id) => docMap.get(String(id)))
+      .filter(Boolean)
+      .map((c) => ({
         ...c,
         phone: maskPhone(c.phone),
         nic: maskNic(c.nic),
       })),
-    });
-  }
-
-  for (const [phone, list] of phoneMap.entries()) {
-    addGroup('duplicate_phone', phone, list);
-  }
-  for (const [nic, list] of nicMap.entries()) {
-    addGroup('duplicate_nic', nic, list);
-  }
-  for (const [email, list] of emailMap.entries()) {
-    addGroup('duplicate_email', email, list);
-  }
+  }));
 
   res.json({
     success: true,
@@ -223,7 +253,8 @@ export const getDuplicates = async (req, res) => {
 
 /**
  * Merge two customers inside one atomic transaction.
- * Owner only. Reassigns Dev 3 collections via reassign adapter.
+ * All reads and writes run within the session.
+ * Takes the source with findOneAndUpdate returning old doc, then $inc target with old balances and $max creditLimitCents.
  */
 export const mergeCustomers = async (req, res) => {
   const sourceId = requireId(req.params.id, 'source customer id');
@@ -233,100 +264,123 @@ export const mergeCustomers = async (req, res) => {
     throw badRequest('Cannot merge a customer into itself');
   }
 
-  const [source, target] = await Promise.all([
-    Customer.findById(sourceId),
-    Customer.findById(targetId),
-  ]);
-
-  if (!source) throw notFound('Source customer not found');
-  if (!target) throw notFound('Target customer not found');
-
-  if (!source.tenantId.equals(target.tenantId)) {
-    throw notFound('Customer not found');
-  }
-
-  if (source.isArchived || source.mergedInto) {
-    throw badRequest('Source customer is already archived or merged');
-  }
-  if (target.isArchived || target.mergedInto) {
-    throw badRequest('Target customer is archived or merged');
-  }
-
-  let curr = target;
-  while (curr && curr.mergedInto) {
-    if (curr.mergedInto.equals(source._id)) {
-      throw badRequest('Merge would create a circular reference');
-    }
-    curr = await Customer.findById(curr.mergedInto);
-  }
-
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
+    // 1. Read target inside session
+    const target = await Customer.findOne(
+      { _id: targetId, isArchived: false, mergedInto: null },
+      null,
+      { session }
+    );
+
+    if (!target) {
+      const anyTarget = await Customer.findById(targetId, null, { session });
+      if (!anyTarget) throw notFound('Target customer not found');
+      throw badRequest('Target customer is archived or merged');
+    }
+
+    // Loop check: ensure target is not merged into source
+    let curr = target;
+    while (curr && curr.mergedInto) {
+      if (curr.mergedInto.equals(sourceId)) {
+        throw badRequest('Merge would create a circular reference');
+      }
+      curr = await Customer.findById(curr.mergedInto, null, { session });
+    }
+
+    // 2. Atomically claim source inside session and get old values
+    const source = await Customer.findOneAndUpdate(
+      { _id: sourceId, isArchived: false, mergedInto: null },
+      {
+        $set: {
+          isArchived: true,
+          mergedInto: target._id,
+          currentBalanceCents: 0,
+          loyaltyPoints: 0,
+        },
+      },
+      { new: false, session }
+    );
+
+    if (!source) {
+      const anySource = await Customer.findById(sourceId, null, { session });
+      if (!anySource) throw notFound('Source customer not found');
+      throw badRequest('Source customer is already archived or merged');
+    }
+
+    // Cross-tenant check
+    if (!source.tenantId.equals(target.tenantId)) {
+      throw notFound('Customer not found');
+    }
+
     const tenantId = source.tenantId;
 
-    // 1. Reassign references in Dev 3's collections via adapter
+    // 3. Reassign references in Dev 3 collections via adapter inside session
     await reassignCustomerData(tenantId, source._id, target._id, session);
 
-    // 2. Consolidate financial & loyalty metrics onto target
-    target.currentBalanceCents = (target.currentBalanceCents || 0) + (source.currentBalanceCents || 0);
-    target.loyaltyPoints = (target.loyaltyPoints || 0) + (source.loyaltyPoints || 0);
-    target.creditLimitCents = Math.max(target.creditLimitCents || 0, source.creditLimitCents || 0);
-
-    // 3. Merge tags
-    const combinedTags = Array.from(new Set([...(target.tags || []), ...(source.tags || [])]));
-    target.tags = combinedTags;
-
-    // 4. Merge notes
+    // 4. Merge tags and notes
+    const combinedTags = Array.from(new Set([...(target.tags || []), ...(source.tags || [])])).slice(0, 20);
+    let mergedNotes = target.notes || '';
     if (source.notes) {
-      if (!target.notes) {
-        target.notes = source.notes;
-      } else if (!target.notes.includes(source.notes)) {
-        target.notes = `${target.notes}\n[Merged note]: ${source.notes}`;
+      if (!mergedNotes) {
+        mergedNotes = source.notes;
+      } else if (!mergedNotes.includes(source.notes)) {
+        mergedNotes = `${mergedNotes}\n[Merged note]: ${source.notes}`.slice(0, 2000);
       }
     }
 
-    // 5. Archive source customer with mergedInto pointer
-    source.isArchived = true;
-    source.mergedInto = target._id;
-    source.currentBalanceCents = 0;
-    source.loyaltyPoints = 0;
-
-    await target.save({ session });
-    await source.save({ session });
+    // 5. Atomically $inc target balances and $max credit limit with session
+    const updatedTarget = await Customer.findOneAndUpdate(
+      { _id: target._id },
+      {
+        $inc: {
+          currentBalanceCents: source.currentBalanceCents || 0,
+          loyaltyPoints: source.loyaltyPoints || 0,
+        },
+        $max: {
+          creditLimitCents: source.creditLimitCents || 0,
+        },
+        $set: {
+          tags: combinedTags,
+          notes: mergedNotes,
+        },
+      },
+      { new: true, session }
+    );
 
     await session.commitTransaction();
+
+    await audit.record({
+      action: 'customer.merge',
+      entity: 'Customer',
+      entityId: target._id,
+      before: { sourceId: source._id, targetId: target._id },
+      after: {
+        mergedInto: target._id,
+        currentBalanceCents: updatedTarget.currentBalanceCents,
+        loyaltyPoints: updatedTarget.loyaltyPoints,
+        creditLimitCents: updatedTarget.creditLimitCents,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: 'Customers merged successfully',
+      data: updatedTarget,
+    });
   } catch (err) {
     await session.abortTransaction();
     throw err;
   } finally {
     session.endSession();
   }
-
-  await audit.record({
-    action: 'customer.merge',
-    entity: 'Customer',
-    entityId: target._id,
-    before: { sourceId: source._id, targetId: target._id },
-    after: {
-      mergedInto: target._id,
-      currentBalanceCents: target.currentBalanceCents,
-      loyaltyPoints: target.loyaltyPoints,
-      creditLimitCents: target.creditLimitCents,
-    },
-  });
-
-  res.json({
-    success: true,
-    message: 'Customers merged successfully',
-    data: target,
-  });
 };
 
 /**
  * Customer history (invoices, payments, credit notes, installment plans, loyalty).
- * Read-only.
+ * Passes invoices through maskCostMargins(invoice, hasSpecial(role, 'view_cost_margin')).
  *
  * TODO (Dev 5): Include repair tickets and devices owned once repairs and inventory modules exist.
  */
@@ -350,6 +404,10 @@ export const getCustomerHistory = async (req, res) => {
     ? await Payment.find({ invoiceId: { $in: invoiceIds } }).sort({ createdAt: -1 }).lean()
     : [];
 
+  const role = req.auth?.role || getContext()?.role;
+  const allowCostMargin = hasSpecial(role, 'view_cost_margin');
+  const sanitizedInvoices = invoices.map((inv) => maskCostMargins(inv, allowCostMargin));
+
   res.json({
     success: true,
     data: {
@@ -362,12 +420,11 @@ export const getCustomerHistory = async (req, res) => {
         creditLimitCents: customer.creditLimitCents,
         loyaltyPoints: customer.loyaltyPoints,
       },
-      invoices,
+      invoices: sanitizedInvoices,
       payments,
       creditNotes,
       installmentPlans,
       loyaltyTransactions,
-      // Placeholder for future modules
       devices: [],
       repairs: [],
     },
@@ -377,7 +434,8 @@ export const getCustomerHistory = async (req, res) => {
 };
 
 /**
- * CSV Import (all-or-nothing, per-row validation).
+ * CSV Import (all-or-nothing, per-row validation, executed within a transaction session).
+ * Checks existing phone variants including ARCHIVED customers.
  */
 export const importCustomers = async (req, res) => {
   const rawCsv = typeof req.body === 'string' ? req.body : (req.body?.csv || '');
@@ -394,30 +452,70 @@ export const importCustomers = async (req, res) => {
     throw err;
   }
 
-  // Check for duplicate phones against existing database records
-  const allPhones = validCustomers.map((c) => c.customerData.phone);
-  const existingDocs = await Customer.find({ phone: { $in: allPhones }, isArchived: false }).lean();
+  // Check for duplicate phones against existing database records (including ARCHIVED customers)
+  const allVariants = new Set();
+  const phoneToRowsMap = new Map();
 
-  if (existingDocs.length > 0) {
-    const existingSet = new Set(existingDocs.map((d) => d.phone));
-    const dbDupErrors = validCustomers
-      .filter((c) => existingSet.has(c.customerData.phone))
-      .map((c) => ({
-        row: c.rowNumber,
-        field: 'phone',
-        message: `Phone number "${c.customerData.phone}" already exists in the shop`,
-      }));
-
-    const err = badRequest(
-      'CSV contains phone numbers that already exist in the shop',
-      'DUPLICATE_PHONE_IN_CSV'
-    );
-    err.data = { errors: dbDupErrors };
-    throw err;
+  for (const c of validCustomers) {
+    const variants = phoneVariants(c.customerData.phone);
+    for (const v of variants) {
+      allVariants.add(v);
+      const list = phoneToRowsMap.get(v) || [];
+      list.push(c);
+      phoneToRowsMap.set(v, list);
+    }
   }
 
-  const docsToInsert = validCustomers.map((c) => c.customerData);
-  const inserted = await Customer.insertMany(docsToInsert);
+  // Query ALL existing customers (archived included)
+  const existingDocs = await Customer.find({ phone: { $in: Array.from(allVariants) } }).lean();
+
+  if (existingDocs.length > 0) {
+    const dbDupErrors = [];
+    const seenRowErrors = new Set();
+
+    for (const doc of existingDocs) {
+      const matchingRows = phoneToRowsMap.get(doc.phone) || [];
+      for (const row of matchingRows) {
+        const errorKey = `${row.rowNumber}:${row.customerData.phone}`;
+        if (!seenRowErrors.has(errorKey)) {
+          seenRowErrors.add(errorKey);
+          const message = doc.isArchived
+            ? `Phone number "${row.customerData.phone}" belongs to an archived customer in the shop`
+            : `Phone number "${row.customerData.phone}" already exists in the shop`;
+          dbDupErrors.push({
+            row: row.rowNumber,
+            field: 'phone',
+            message,
+          });
+        }
+      }
+    }
+
+    if (dbDupErrors.length > 0) {
+      const err = badRequest(
+        'CSV contains phone numbers that already exist in the shop',
+        'DUPLICATE_PHONE_IN_CSV'
+      );
+      err.data = { errors: dbDupErrors };
+      throw err;
+    }
+  }
+
+  // Insert within a transaction session
+  const session = await mongoose.startSession();
+  session.startTransaction();
+  let inserted;
+
+  try {
+    const docsToInsert = validCustomers.map((c) => c.customerData);
+    inserted = await Customer.insertMany(docsToInsert, { session });
+    await session.commitTransaction();
+  } catch (err) {
+    await session.abortTransaction();
+    throw err;
+  } finally {
+    session.endSession();
+  }
 
   await audit.record({
     action: 'customer.import',
@@ -445,6 +543,7 @@ export const getLoyaltySettingsController = async (req, res) => {
 
 /**
  * Update tenant loyalty settings.
+ * Validates with Number.isFinite and caps (pointsPerHundredRupees<=1000, valuePerPointCents<=10000, minRedemptionPoints<=1000000, expiryDays<=3650).
  */
 export const updateLoyaltySettingsController = async (req, res) => {
   const body = pick(req.body, ['pointsPerHundredRupees', 'valuePerPointCents', 'minRedemptionPoints', 'expiryDays']);
@@ -452,22 +551,30 @@ export const updateLoyaltySettingsController = async (req, res) => {
 
   if (body.pointsPerHundredRupees !== undefined) {
     const v = Number(body.pointsPerHundredRupees);
-    if (isNaN(v) || v < 0) throw badRequest('pointsPerHundredRupees must be 0 or greater');
+    if (!Number.isFinite(v) || v < 0 || v > 1000) {
+      throw badRequest('pointsPerHundredRupees must be a finite number between 0 and 1000');
+    }
     updateData.pointsPerHundredRupees = Math.round(v);
   }
   if (body.valuePerPointCents !== undefined) {
     const v = Number(body.valuePerPointCents);
-    if (isNaN(v) || v < 0) throw badRequest('valuePerPointCents must be 0 or greater');
+    if (!Number.isFinite(v) || v < 0 || v > 10000) {
+      throw badRequest('valuePerPointCents must be a finite number between 0 and 10000');
+    }
     updateData.valuePerPointCents = Math.round(v);
   }
   if (body.minRedemptionPoints !== undefined) {
     const v = Number(body.minRedemptionPoints);
-    if (isNaN(v) || v < 0) throw badRequest('minRedemptionPoints must be 0 or greater');
+    if (!Number.isFinite(v) || v < 0 || v > 1000000) {
+      throw badRequest('minRedemptionPoints must be a finite number between 0 and 1000000');
+    }
     updateData.minRedemptionPoints = Math.round(v);
   }
   if (body.expiryDays !== undefined) {
     const v = Number(body.expiryDays);
-    if (isNaN(v) || v < 0) throw badRequest('expiryDays must be 0 or greater');
+    if (!Number.isFinite(v) || v < 0 || v > 3650) {
+      throw badRequest('expiryDays must be a finite number between 0 and 3650');
+    }
     updateData.expiryDays = Math.round(v);
   }
 

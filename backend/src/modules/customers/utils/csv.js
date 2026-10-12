@@ -69,6 +69,7 @@ export function parseCsvRows(text) {
     }
   }
 
+  rows.unclosedQuote = inQuotes;
   return rows;
 }
 
@@ -78,6 +79,14 @@ export function parseCsvRows(text) {
  */
 export function validateCustomerCsvRows(rows) {
   const errors = [];
+
+  if (rows?.unclosedQuote) {
+    return {
+      validCustomers: [],
+      errors: [{ row: rows.length || 1, field: 'file', message: 'CSV file ends inside an open quote' }],
+    };
+  }
+
   if (!rows || rows.length < 2) {
     return {
       validCustomers: [],
@@ -154,11 +163,28 @@ export function validateCustomerCsvRows(rows) {
     }
 
     // 3. Validate email
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (email && email.length > 254) {
+      errors.push({ row: rowNumber, field: 'email', message: 'Email must not exceed 254 characters' });
+    } else if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       errors.push({ row: rowNumber, field: 'email', message: 'Invalid email address format' });
     }
 
-    // 4. Validate type
+    // 4. Validate NIC
+    if (nic && nic.length > 20) {
+      errors.push({ row: rowNumber, field: 'nic', message: 'NIC must not exceed 20 characters' });
+    }
+
+    // 5. Validate address
+    if (address && address.length > 300) {
+      errors.push({ row: rowNumber, field: 'address', message: 'Address must not exceed 300 characters' });
+    }
+
+    // 6. Validate notes
+    if (notes && notes.length > 2000) {
+      errors.push({ row: rowNumber, field: 'notes', message: 'Notes must not exceed 2000 characters' });
+    }
+
+    // 7. Validate type
     let type = 'retail';
     if (rawType) {
       if (['retail', 'wholesale'].includes(rawType)) {
@@ -168,15 +194,16 @@ export function validateCustomerCsvRows(rows) {
       }
     }
 
-    // 5. Parse tags
+    // 8. Parse tags
     const tags = rawTags
       ? rawTags
           .split(/[,;]/)
           .map((t) => t.trim())
           .filter((t) => t.length > 0 && t.length <= 50)
+          .slice(0, 20)
       : [];
 
-    // 6. Marketing opt-in
+    // 9. Marketing opt-in
     const marketingOptIn = ['true', '1', 'yes', 'y'].includes(rawOptIn);
 
     validCustomers.push({
