@@ -12,7 +12,7 @@ export const config = {
   mongoUri: env.MONGO_URI,
   jwtSecret: env.JWT_SECRET,
   accessTokenTtl: env.ACCESS_TOKEN_TTL || '15m',
-  clientUrl: env.CLIENT_URL || 'http://localhost:3000',
+  clientUrl: (env.CLIENT_URL || 'http://localhost:3000').replace(/\/+$/, ''), // browsers send Origin without a trailing slash
   trustProxy: env.TRUST_PROXY ? Number(env.TRUST_PROXY) : 0,
   authRateLimitMax: Number(env.AUTH_RATE_LIMIT_MAX) || 100,
   trialDays: Number(env.TRIAL_DAYS) || 14,
