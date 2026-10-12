@@ -37,8 +37,18 @@ Each item states the safe default that was implemented. Confirm or change.
 25. ~~**Approval PIN lockout is in memory.**~~ **Resolved:** `users.service verifyApprovalPin` + `POST /api/users/verify-pin`; the lockout (5 wrong PINs in 15 min -> locked 15 min, 429 `PIN_LOCKED`) is stored on the requesting user and audited (`pin.verify_failed`, `pin.locked`). The POS adapter calls it.
 26. ~~**PIN in a query string.**~~ **Resolved:** the GET eligibility check ignores any PIN; the PIN-checked variant is `POST /api/pos/credit/customers/:id/eligibility { pin, amountCents }`. Frontend `posApi.js` updated.
 27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
-28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
+28: ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
+
+## Inventory, IMEI, Purchasing & WooCommerce review fixes (Dev 4)
+
+29. **DocumentSequence concurrency under MongoDB transactions:** Per-branch atomic counters for GRN, PO, BIL, Supplier Payment, and Purchase Return numbers run inside multi-document transactions with an automatic backoff retry loop (`executeWithSession` / `session.withTransaction`) to handle MongoDB `WriteConflict` / `TransientTransactionError` (code 112) under high parallel load.
+30. **Stock count missing & unknown IMEIs:** During stock count approval, variance is dynamically recomputed against live `StockLevel.qty`. Missing scanned serial units are transitioned to `written_off` via `transitionStatus` (reducing stock and posting Dr 5040 / Cr 1050). Unknown scanned IMEIs are recorded in `unknownImeis` response list and never auto-created into inventory.
+31. **Zero-value GRN ledger entries:** GRNs with total cost 0 update inventory counts but bypass `ledgerService.postJournal` and `SupplierPayment` creation (which strictly requires `amountCents >= 1`).
+32. **Cash GRN with no open session:** Cash GRNs record a cash-out via `financeService.recordCashOut` using reason `GRN <documentNumber>`. If the receiving user does not have an open cash drawer session at that branch, the cash-out will be refused by `financeService`. Confirm whether cash GRNs without an open cashier shift should block receipt or allow a ledger-only fallback.
+33. **Post-commit low-stock alerts:** Low-stock threshold evaluations hook into `session.commitTransaction` and dispatch alerts only after the database transaction successfully commits, preventing phantom alerts on rolled back transactions.
 
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
+- Confirm DocumentSequence collection indexes (`tenantId`, `branchId`, `docType`) exist in production MongoDB replica set.
+
