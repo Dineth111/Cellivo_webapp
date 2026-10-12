@@ -109,16 +109,41 @@ export async function adjustStockLevel({
       { session }
     );
 
-    // Low stock check
+    // Low stock check - only send after transaction commits
     if (product.reorderLevel > 0 && balanceAfter <= product.reorderLevel && qty < 0) {
-      sendLowStockAlert({
+      const alertPayload = {
         tenantId: tid,
         branchId: bid,
         productId: pid,
         productName: product.name,
         currentQty: balanceAfter,
         reorderLevel: product.reorderLevel,
-      }).catch((err) => console.error('[LowStockAlert Error]', err));
+      };
+
+      if (session && typeof session.inTransaction === 'function' && session.inTransaction()) {
+        if (!session._postCommitCallbacks) {
+          session._postCommitCallbacks = [];
+          const origCommit = session.commitTransaction.bind(session);
+          session.commitTransaction = async function (...args) {
+            const result = await origCommit(...args);
+            const callbacks = session._postCommitCallbacks || [];
+            session._postCommitCallbacks = [];
+            for (const cb of callbacks) {
+              try {
+                await cb();
+              } catch (err) {
+                console.error('[PostCommit Hook Error]', err);
+              }
+            }
+            return result;
+          };
+        }
+        session._postCommitCallbacks.push(() =>
+          sendLowStockAlert(alertPayload).catch((err) => console.error('[LowStockAlert Error]', err))
+        );
+      } else {
+        sendLowStockAlert(alertPayload).catch((err) => console.error('[LowStockAlert Error]', err));
+      }
     }
 
     return {

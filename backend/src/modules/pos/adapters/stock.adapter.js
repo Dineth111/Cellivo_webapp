@@ -24,7 +24,11 @@ async function formatProductWithStock(product, branchId, session = null) {
   const prodDoc = product.toObject ? product.toObject() : product;
 
   const stockLevel = await StockLevel.findOne({ branchId, productId: prodDoc._id }).session(session).lean();
-  const serialUnits = await SerialUnit.find({ branchId, productId: prodDoc._id }).session(session).lean();
+  const serialUnits = await SerialUnit.find({
+    branchId,
+    productId: prodDoc._id,
+    status: { $in: ['in_stock', 'reserved'] },
+  }).session(session).lean();
 
   return {
     ...prodDoc,
@@ -70,7 +74,11 @@ export async function searchProducts(tenantId, branchId, query) {
     const productIds = products.map((p) => p._id);
     const [stockLevels, serialUnits] = await Promise.all([
       StockLevel.find({ branchId, productId: { $in: productIds } }).lean(),
-      SerialUnit.find({ branchId, productId: { $in: productIds } }).lean(),
+      SerialUnit.find({
+        branchId,
+        productId: { $in: productIds },
+        status: { $in: ['in_stock', 'reserved'] },
+      }).lean(),
     ]);
 
     const stockMap = new Map(stockLevels.map((s) => [String(s.productId), s]));
@@ -404,13 +412,12 @@ export async function removeTradeIn(tenantId, branchId, imeiOrBarcode, session =
 
     if (unit) {
       if (unit.status === 'sold') throw alreadySold();
-      await SerialUnit.deleteOne({ _id: unit._id }).session(session);
-      await stockService.adjustStockLevel({
+      await imeiService.transitionStatus({
         tenantId,
-        productId: unit.productId,
+        imei: unit.imei1 || imeiOrBarcode,
+        newStatus: 'written_off',
         branchId,
-        type: 'trade_in_void',
-        qtyChange: -1,
+        reason: 'Trade-in void',
         session,
       });
       const product = await Product.findById(unit.productId).session(session).lean();
