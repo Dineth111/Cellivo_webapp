@@ -46,6 +46,7 @@ Each item states the safe default that was implemented. Confirm or change.
 31. **Lockout notice to owner.** FRS F-03 lockout alert (line 45 in `auth.service.js`) remains unwired for Phase 1.
 32. **Platform events.** `new_lead`, `demo_booking`, and `system_threshold_breach` templates are provided in defaults, but triggers are not wired yet.
 33. **Serverless queue worker trigger.** `backend/api/index.js` suggests a serverless deployment where `server.js` intervals do not run; the notification queue needs a scheduled trigger if so.
+34. **In-app broadcast read state.** In-app notifications with `userId: null` share one read state across all users.
 
 ## Go-live checklist
 

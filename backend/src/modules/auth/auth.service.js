@@ -109,7 +109,7 @@ export async function forgotPassword(email) {
   return runWithContext({ tenantId: user.tenantId, userId: user._id }, async () => {
     const token = await issueToken(user._id, 'reset', 30);
     await audit.record({ action: 'auth.password_reset_requested', entity: 'User', entityId: user._id });
-    await notify({
+    notify({
       tenantId: user.tenantId,
       channel: 'email',
       to: email,
@@ -119,7 +119,7 @@ export async function forgotPassword(email) {
         link: setPasswordLink('reset-password', token),
       },
       userId: user._id,
-    });
+    }).catch((e) => console.error('[reset notify]', e.message));
     return token;
   });
 }

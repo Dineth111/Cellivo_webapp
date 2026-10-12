@@ -60,11 +60,24 @@ export async function saveTemplate(req, res) {
     throw badRequest('Invalid event or channel parameters');
   }
 
+  if (!DEFAULT_TEMPLATES[event]) {
+    throw badRequest(`Invalid template event: ${event}`);
+  }
+
   const bodyData = pick(req.body, ['body', 'subject', 'language', 'isActive']);
   const bodyText = str(bodyData.body);
   if (!bodyText) throw badRequest('Template body is required');
 
   const language = str(bodyData.language) || 'en';
+  if (!['en', 'si', 'ta'].includes(language)) {
+    throw badRequest('Invalid language. Supported languages: en, si, ta');
+  }
+
+  const maxBodyLength = channel === 'email' ? 10000 : 1000;
+  if (bodyText.length > maxBodyLength) {
+    throw badRequest(`${channel.toUpperCase()} template body must not exceed ${maxBodyLength} characters`);
+  }
+
   const subject = str(bodyData.subject) || '';
   const isActive = bodyData.isActive !== false;
 
@@ -94,7 +107,7 @@ export async function listLogs(req, res) {
   const { page, limit, skip } = pageParams(req.query);
   const filter = {};
 
-  if (req.query.status && ['queued', 'sent', 'delivered', 'failed'].includes(req.query.status)) {
+  if (req.query.status && ['queued', 'sending', 'sent', 'delivered', 'failed'].includes(req.query.status)) {
     filter.status = req.query.status;
   }
   if (req.query.channel && ['sms', 'email', 'in_app'].includes(req.query.channel)) {
@@ -140,6 +153,13 @@ export async function resendLog(req, res) {
   log.errorReason = '';
   log.nextRetryAt = new Date();
   await log.save();
+
+  await audit.record({
+    action: 'notification_log.resend',
+    entity: 'NotificationLog',
+    entityId: log._id,
+    after: { channel: log.channel, recipient: log.recipient, template: log.template },
+  });
 
   res.json({ success: true, data: log, message: 'Notification queued for retry' });
 }

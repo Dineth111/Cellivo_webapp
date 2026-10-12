@@ -447,6 +447,8 @@ describe('Notification Service (F-18 Phase 1)', () => {
 
     const token = await forgotPassword('resetlog@shop.lk');
     expect(token).toBeTruthy();
+    // forgotPassword does not await notify, yield to allow background dispatch
+    await new Promise((r) => setTimeout(r, 50));
     expect(sentEmail).toBeTruthy();
     expect(sentEmail.text).toContain(token);
 
@@ -507,5 +509,87 @@ describe('Notification Service (F-18 Phase 1)', () => {
       InAppNotification.find({ level: 'warning', title: 'SMS Delivery Failed' })
     );
     expect(warnings.length).toBe(1);
+  });
+
+  it('validates saveTemplate event, language, and character limits', async () => {
+    const shop = await signup('valtmpl@shop.lk', 'Val Template Shop');
+
+    // Invalid event
+    const badEvent = await api('put', '/api/notifications/templates/nonexistent_event/sms', shop.token).send({
+      body: 'Hello',
+    });
+    expect(badEvent.status).toBe(400);
+
+    // Invalid language
+    const badLang = await api('put', '/api/notifications/templates/sale_completed/sms', shop.token).send({
+      body: 'Hello',
+      language: 'fr',
+    });
+    expect(badLang.status).toBe(400);
+
+    // SMS body > 1000 chars
+    const tooLongSms = await api('put', '/api/notifications/templates/sale_completed/sms', shop.token).send({
+      body: 'a'.repeat(1001),
+      language: 'en',
+    });
+    expect(tooLongSms.status).toBe(400);
+
+    // Email body > 10000 chars
+    const tooLongEmail = await api('put', '/api/notifications/templates/sale_completed/email', shop.token).send({
+      body: 'a'.repeat(10001),
+      language: 'en',
+    });
+    expect(tooLongEmail.status).toBe(400);
+
+    // Valid update
+    const valid = await api('put', '/api/notifications/templates/sale_completed/sms', shop.token).send({
+      body: 'Valid SMS message',
+      language: 'si',
+    });
+    expect(valid.status).toBe(200);
+  });
+
+  it('audits resendLog and allows status=sending in the logs filter', async () => {
+    const shop = await signup('auditresend@shop.lk', 'Audit Resend Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+
+    // Create a failed log
+    const failedLog = await runWithContext({ tenantId }, async () =>
+      NotificationLog.create({
+        channel: 'sms',
+        recipient: '+947*****567',
+        template: 'sale_completed',
+        body: 'Failed message',
+        status: 'failed',
+        errorReason: 'NO_SMS_CREDITS',
+      })
+    );
+
+    // Resend log
+    const resendRes = await api('post', `/api/notifications/logs/${failedLog._id}/resend`, shop.token);
+    expect(resendRes.status).toBe(200);
+
+    // Check audit entry recorded
+    const auditRes = await api('get', '/api/audit?action=notification_log.resend', shop.token);
+    expect(auditRes.status).toBe(200);
+    expect(auditRes.body.data.length).toBeGreaterThan(0);
+    expect(auditRes.body.data[0].action).toBe('notification_log.resend');
+
+    // Create a sending log to test status=sending filter
+    await runWithContext({ tenantId }, async () =>
+      NotificationLog.create({
+        channel: 'sms',
+        recipient: '+947*****567',
+        template: 'sale_completed',
+        body: 'Sending message',
+        status: 'sending',
+        lockedAt: new Date(),
+      })
+    );
+
+    const filterRes = await api('get', '/api/notifications/logs?status=sending', shop.token);
+    expect(filterRes.status).toBe(200);
+    expect(filterRes.body.data.some((l) => l.status === 'sending')).toBe(true);
   });
 });
