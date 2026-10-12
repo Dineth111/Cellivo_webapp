@@ -2,15 +2,39 @@ import * as wooService from '../services/woocommerce.service.js';
 import WooSyncQueue from '../models/WooSyncQueue.model.js';
 import { requireId, pageParams } from '../../../core/validate.js';
 import { resolveBranch } from '../../pos/utils/branch.js';
+import { record as recordAudit } from '../../../core/audit.js';
 
 export async function getSettings(req, res) {
   const settings = await wooService.getSettings(req.auth.tenantId);
-  res.json({ data: settings });
+  const { consumerKey, consumerSecret, ...safeSettings } = settings;
+  res.json({
+    data: {
+      ...safeSettings,
+      hasCredentials: Boolean(settings.hasCredentials || (consumerKey && consumerSecret)),
+    },
+  });
 }
 
 export async function updateSettings(req, res) {
   const settings = await wooService.updateSettings(req.auth.tenantId, req.body);
-  res.json({ data: settings });
+  const { consumerKey, consumerSecret, ...safeBody } = req.body;
+
+  await recordAudit({
+    action: 'settings.woocommerce_updated',
+    entity: 'WooSettings',
+    entityId: settings._id,
+    after: safeBody,
+    tenantId: req.auth.tenantId,
+    userId: req.auth.userId,
+  });
+
+  const { consumerKey: ck, consumerSecret: cs, ...safeSettings } = settings;
+  res.json({
+    data: {
+      ...safeSettings,
+      hasCredentials: Boolean(settings.hasCredentials || (settings.consumerKey && settings.consumerSecret)),
+    },
+  });
 }
 
 export async function syncProduct(req, res) {

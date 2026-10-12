@@ -122,7 +122,7 @@ router.post('/transfers/:id/cancel', requirePermission('inventory.edit'), wrap(t
 
 // WooCommerce Integration (INT-01 - gated by 'woocommerce' plan feature)
 router.get('/woocommerce/settings', requireFeature('woocommerce'), requirePermission('inventory.view'), wrap(wooCtrl.getSettings));
-router.post('/woocommerce/settings', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.updateSettings));
+router.post('/woocommerce/settings', requireFeature('woocommerce'), requirePermission('settings.edit'), wrap(wooCtrl.updateSettings));
 router.post('/woocommerce/sync-products', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.syncProduct));
 router.post('/woocommerce/sync-stock', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.syncStock));
 router.post('/woocommerce/pull-orders', requireFeature('woocommerce'), requirePermission('inventory.edit'), wrap(wooCtrl.pullOrders));

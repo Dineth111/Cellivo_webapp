@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { startDb, stopDb, resetDb } from './helpers.js';
-import { api, signup } from './api.js';
+import { api, signup, addStaff } from './api.js';
 import Tenant from '../src/modules/tenants/Tenant.model.js';
 import Product from '../src/modules/inventory/models/Product.model.js';
 import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
 import WooSyncQueue from '../src/modules/inventory/models/WooSyncQueue.model.js';
 import WooSettings from '../src/modules/inventory/models/WooSettings.model.js';
+import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import { runAsPlatform, runWithContext } from '../src/core/tenantContext.js';
 
 beforeAll(startDb);
@@ -121,3 +122,56 @@ describe('INT-01 WooCommerce Sync & Queue', () => {
     expect(ordersRes.body.data.ordersCount).toBeGreaterThan(0);
   });
 });
+
+describe('Dev 4 review: 9. WooCommerce secret & permissions', () => {
+  it('masks credentials for cashier and owner, requires settings.edit for update, and audits without secret', async () => {
+    const shop = await setupShop('growth', 'woo-secret-shop@cellivo.lk');
+
+    // 1. Owner updates WooCommerce settings with secrets
+    const upRes = await api('post', '/api/inventory/woocommerce/settings', shop.token).send({
+      storeUrl: 'https://secretshop.lk',
+      consumerKey: 'ck_secret_key_123',
+      consumerSecret: 'cs_super_secret_456',
+      isActive: true,
+    });
+    expect(upRes.status).toBe(200);
+    // Response should NOT contain secrets
+    expect(upRes.body.data.consumerKey).toBeUndefined();
+    expect(upRes.body.data.consumerSecret).toBeUndefined();
+    expect(upRes.body.data.hasCredentials).toBe(true);
+
+    // 2. Owner fetches settings -> no secrets returned
+    const ownerGetRes = await api('get', '/api/inventory/woocommerce/settings', shop.token);
+    expect(ownerGetRes.status).toBe(200);
+    expect(ownerGetRes.body.data.consumerKey).toBeUndefined();
+    expect(ownerGetRes.body.data.consumerSecret).toBeUndefined();
+    expect(ownerGetRes.body.data.hasCredentials).toBe(true);
+
+    // 3. Create a Cashier staff member
+    const cashier = await addStaff(shop, 'cashier', 'cashier-woo@cellivo.lk');
+
+    // Cashier fetches settings -> no secrets returned
+    const cashierGetRes = await api('get', '/api/inventory/woocommerce/settings', cashier.token);
+    expect(cashierGetRes.status).toBe(200);
+    expect(cashierGetRes.body.data.consumerKey).toBeUndefined();
+    expect(cashierGetRes.body.data.consumerSecret).toBeUndefined();
+    expect(cashierGetRes.body.data.hasCredentials).toBe(true);
+
+    // 4. Cashier attempts to update settings -> 403 Forbidden (lacks settings.edit)
+    const cashierUpdateRes = await api('post', '/api/inventory/woocommerce/settings', cashier.token).send({
+      storeUrl: 'https://hackedshop.lk',
+    });
+    expect(cashierUpdateRes.status).toBe(403);
+
+    // 5. Verify audit log entry exists and does NOT contain secrets
+    const auditLogs = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await AuditLog.find({ action: 'settings.woocommerce_updated' });
+    });
+    expect(auditLogs.length).toBeGreaterThan(0);
+    const lastAudit = auditLogs[auditLogs.length - 1];
+    expect(lastAudit.after?.consumerKey).toBeUndefined();
+    expect(lastAudit.after?.consumerSecret).toBeUndefined();
+    expect(lastAudit.after?.storeUrl).toBe('https://secretshop.lk');
+  });
+});
+

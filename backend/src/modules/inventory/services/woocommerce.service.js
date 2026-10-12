@@ -14,14 +14,22 @@ async function withTenant(tenantId, fn) {
 /**
  * Get tenant's WooCommerce settings.
  */
-export async function getSettings(tenantId) {
+export async function getSettings(tenantId, includeSecrets = false) {
   return await withTenant(tenantId, async () => {
     let settings = await WooSettings.findOne({}).lean();
     if (!settings) {
       settings = await WooSettings.create({});
       settings = settings.toObject();
     }
-    return settings;
+    const hasCredentials = Boolean(settings.consumerKey && settings.consumerSecret);
+    if (includeSecrets) {
+      return { ...settings, hasCredentials };
+    }
+    const { consumerKey, consumerSecret, ...safeSettings } = settings;
+    return {
+      ...safeSettings,
+      hasCredentials,
+    };
   });
 }
 
