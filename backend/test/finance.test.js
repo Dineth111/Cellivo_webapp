@@ -11,7 +11,7 @@ import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
 
 beforeAll(startDb);
@@ -89,7 +89,7 @@ describe('PHASE 7: Cash Drawer and Finance (FIN-01 to FIN-07)', () => {
 
     // Seed stock
     await runWithContext({ tenantId }, async () => {
-      await FakeStock.create({
+      await seedStock({
         tenantId,
         branchId,
         barcode: 'FIN-PHONE-01',
