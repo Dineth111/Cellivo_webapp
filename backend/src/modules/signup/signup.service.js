@@ -97,13 +97,17 @@ export async function start(b = {}) {
     { email, data, codeHash: codeHash(email, code), attempts: 0, expiresAt: new Date(Date.now() + CODE_MINUTES * 60_000) },
     { upsert: true }
   );
-  await notify({
-    tenantId: null,
-    channel: 'email',
-    to: email,
-    template: 'signup_verification',
-    data: { code, customer_name: name },
-  });
+  try {
+    await notify({
+      tenantId: null,
+      channel: 'email',
+      to: email,
+      template: 'signup_verification',
+      data: { code, customer_name: name },
+    });
+  } catch (err) {
+    console.error('[signup notify error]', err.message || err);
+  }
   return { email, expiresInMinutes: CODE_MINUTES, ...(config.env === 'test' && { devCode: code }) };
 }
 
@@ -116,13 +120,18 @@ export async function resend(emailRaw) {
   pending.codeHash = codeHash(email, code);
   pending.attempts = 0;
   pending.expiresAt = new Date(Date.now() + CODE_MINUTES * 60_000);
-  await notify({
-    tenantId: null,
-    channel: 'email',
-    to: email,
-    template: 'signup_verification',
-    data: { code, customer_name: pending.data?.name || '' },
-  });
+  await pending.save();
+  try {
+    await notify({
+      tenantId: null,
+      channel: 'email',
+      to: email,
+      template: 'signup_verification',
+      data: { code, customer_name: pending.data?.name || '' },
+    });
+  } catch (err) {
+    console.error('[signup resend notify error]', err.message || err);
+  }
   return { email, expiresInMinutes: CODE_MINUTES, ...(config.env === 'test' && { devCode: code }) };
 }
 

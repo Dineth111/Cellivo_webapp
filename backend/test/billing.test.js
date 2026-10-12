@@ -4,6 +4,7 @@ import { api, signup, addStaff } from './api.js';
 import Tenant from '../src/modules/tenants/Tenant.model.js';
 import { Invoice, Payment, Coupon, Notice } from '../src/modules/billing/billing.models.js';
 import { runBillingCycle, DAY } from '../src/modules/billing/billing.service.js';
+import { setEmailProvider, resetProviders } from '../src/modules/notifications/providers/provider.interface.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -61,6 +62,44 @@ describe('F-01 sign-up', () => {
     await Coupon.create({ code: 'WELCOME20', type: 'percent', percent: 20 });
     expect((await api('post', '/api/signup/start').send(form({ code: 'welcome20' }))).status).toBe(202);
     expect((await api('post', '/api/signup/start').send(form({ email: 'b@shop.lk', phone: '+94770000001', code: 'NOPE' }))).body.code).toBe('CODE_INVALID');
+  });
+
+  it('resend stores the new code, so the new code verifies and the old one does not', async () => {
+    const start = await api('post', '/api/signup/start').send(form());
+    expect(start.status).toBe(202);
+    const oldCode = start.body.data.devCode;
+
+    const resend = await api('post', '/api/signup/resend').send({ email: 'nimal@shop.lk' });
+    expect(resend.status).toBe(200);
+    const newCode = resend.body.data.devCode;
+    expect(newCode).toBeDefined();
+
+    // old code does not verify
+    const tryOld = await api('post', '/api/signup/verify').send({ email: 'nimal@shop.lk', code: oldCode });
+    expect(tryOld.status).toBe(400);
+    expect(tryOld.body.code).toBe('CODE_WRONG');
+
+    // new code verifies
+    const tryNew = await api('post', '/api/signup/verify').send({ email: 'nimal@shop.lk', code: newCode });
+    expect(tryNew.status).toBe(201);
+  });
+
+  it('does not fail signup start or resend when email notification throws', async () => {
+    const brokenProvider = {
+      send: async () => {
+        throw new Error('Email service unavailable');
+      },
+    };
+    setEmailProvider(brokenProvider);
+    try {
+      const start = await api('post', '/api/signup/start').send(form({ email: 'trycatch@shop.lk', phone: '+94771122334' }));
+      expect(start.status).toBe(202);
+
+      const resend = await api('post', '/api/signup/resend').send({ email: 'trycatch@shop.lk' });
+      expect(resend.status).toBe(200);
+    } finally {
+      resetProviders();
+    }
   });
 });
 
