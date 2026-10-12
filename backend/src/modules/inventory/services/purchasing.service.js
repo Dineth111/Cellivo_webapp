@@ -10,15 +10,11 @@ import SerialUnit from '../models/SerialUnit.model.js';
 import * as stockService from './stock.service.js';
 import * as imeiService from './imei.service.js';
 import * as ledgerService from '../../pos/services/ledger.service.js';
+import DocumentSequence from '../models/DocumentSequence.model.js';
+import * as financeService from '../../pos/services/finance.service.js';
 import notificationsAdapter from '../adapters/notifications.adapter.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound } from '../../../core/errors.js';
-
-function generateNumber(prefix = 'GRN') {
-  const d = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const rnd = Math.floor(1000 + Math.random() * 9000);
-  return `${prefix}-${d}-${rnd}`;
-}
 
 async function withTenant(tenantId, fn) {
   const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
@@ -29,17 +25,31 @@ async function executeWithSession(passedSession, fn) {
   if (passedSession) {
     return await fn(passedSession);
   }
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const res = await fn(session);
-    await session.commitTransaction();
-    return res;
-  } catch (err) {
-    await session.abortTransaction();
-    throw err;
-  } finally {
-    session.endSession();
+  const maxRetries = 10;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const session = await mongoose.startSession();
+    try {
+      return await session.withTransaction(async () => {
+        return await fn(session);
+      });
+    } catch (err) {
+      const isTransient =
+        err?.errorLabels?.has?.('TransientTransactionError') ||
+        err?.errorLabels?.includes?.('TransientTransactionError') ||
+        (Array.isArray(err?.errorLabels) && err.errorLabels.includes('TransientTransactionError')) ||
+        (err?.errorLabelSet && err.errorLabelSet.has('TransientTransactionError')) ||
+        err?.hasErrorLabel?.('TransientTransactionError') ||
+        err?.code === 112 ||
+        err?.codeName === 'WriteConflict';
+
+      if (isTransient && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 25 * attempt + Math.floor(Math.random() * 30)));
+        continue;
+      }
+      throw err;
+    } finally {
+      await session.endSession();
+    }
   }
 }
 
@@ -65,7 +75,7 @@ export async function createPurchaseOrder({
         throw badRequest('Purchase order must contain at least one item');
       }
 
-      const poNumber = generateNumber('PO');
+      const poNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'PO', s);
       let subtotalCents = 0;
       const processedItems = [];
 
@@ -167,7 +177,23 @@ export async function createGrn({
         throw badRequest('GRN must contain at least one item');
       }
 
-      const grnNumber = generateNumber('GRN');
+      let po = null;
+      if (purchaseOrderId) {
+        po = await PurchaseOrder.findOne({ _id: purchaseOrderId }).session(s);
+        if (!po) throw notFound('Purchase order not found');
+
+        // Supplier must match
+        if (String(po.supplierId) !== String(supplierId)) {
+          throw badRequest('Supplier does not match purchase order supplier');
+        }
+
+        // PO status must be sent or partially_received
+        if (!['sent', 'partially_received'].includes(po.status)) {
+          throw badRequest(`Purchase order status must be 'sent' or 'partially_received' (current: ${po.status})`);
+        }
+      }
+
+      const grnNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'GRN', s);
       let totalAmountCents = 0;
       const processedItems = [];
 
@@ -177,9 +203,27 @@ export async function createGrn({
         if (!product) throw notFound(`Product ${pid} not found`);
 
         const qty = Math.max(1, parseInt(item.qty, 10) || 1);
-        const unitCostCents = item.unitCostCents != null ? Number(item.unitCostCents) : (product.costPriceCents || 0);
+
+        // unitCostCents must be a non-negative integer
+        let rawUnitCost = item.unitCostCents != null ? item.unitCostCents : product.costPriceCents;
+        if (rawUnitCost == null || !Number.isInteger(Number(rawUnitCost)) || Number(rawUnitCost) < 0) {
+          throw badRequest('unitCostCents must be a non-negative integer');
+        }
+        const unitCostCents = Number(rawUnitCost);
         const itemTotalCost = qty * unitCostCents;
         totalAmountCents += itemTotalCost;
+
+        // With PO: product must be on PO, received qty cannot exceed ordered - received
+        if (po) {
+          const poLine = po.items.find((i) => String(i.productId) === String(product._id));
+          if (!poLine) {
+            throw badRequest(`Product ${product.name} is not on the purchase order`);
+          }
+          const remaining = poLine.qty - (poLine.receivedQty || 0);
+          if (qty > remaining) {
+            throw badRequest(`Received quantity (${qty}) exceeds remaining ordered quantity (${remaining}) for product ${product.name}`);
+          }
+        }
 
         const scannedImeis = [];
         if (product.isSerialised) {
@@ -270,19 +314,16 @@ export async function createGrn({
       }
 
       // 3. Update Purchase Order if attached
-      if (purchaseOrderId) {
-        const po = await PurchaseOrder.findOne({ _id: purchaseOrderId }).session(s);
-        if (po) {
-          for (const pItem of processedItems) {
-            const poLine = po.items.find((i) => String(i.productId) === String(pItem.productId));
-            if (poLine) {
-              poLine.receivedQty = (poLine.receivedQty || 0) + pItem.qty;
-            }
+      if (po) {
+        for (const pItem of processedItems) {
+          const poLine = po.items.find((i) => String(i.productId) === String(pItem.productId));
+          if (poLine) {
+            poLine.receivedQty = (poLine.receivedQty || 0) + pItem.qty;
           }
-          const allReceived = po.items.every((i) => (i.receivedQty || 0) >= i.qty);
-          po.status = allReceived ? 'received' : 'partially_received';
-          await po.save({ session: s });
         }
+        const allReceived = po.items.every((i) => (i.receivedQty || 0) >= i.qty);
+        po.status = allReceived ? 'received' : 'partially_received';
+        await po.save({ session: s });
       }
 
       // 4. Ledger posting & Supplier Bill / Balance
@@ -290,25 +331,27 @@ export async function createGrn({
       const dueDate = new Date(Date.now() + (supplier.paymentTermsDays || 30) * 86400000);
 
       if (paymentType === 'credit') {
-        // Post Dr 1050 Inventory / Cr 2040 Accounts payable
-        await ledgerService.postJournal({
-          tenantId,
-          branchId,
-          referenceType: 'purchase',
-          referenceId: grnNumber,
-          description: `GRN ${grnNumber} from ${supplier.name} on credit`,
-          lines: [
-            { accountCode: '1050', debit: totalAmountCents, credit: 0 },
-            { accountCode: '2040', debit: 0, credit: totalAmountCents },
-          ],
-          createdBy: userId,
-          session: s,
-        });
+        // Post Dr 1050 Inventory / Cr 2040 Accounts payable (skip if total is 0)
+        if (totalAmountCents > 0) {
+          await ledgerService.postJournal({
+            tenantId,
+            branchId,
+            referenceType: 'purchase',
+            referenceId: grnNumber,
+            description: `GRN ${grnNumber} from ${supplier.name} on credit`,
+            lines: [
+              { accountCode: '1050', debit: totalAmountCents, credit: 0 },
+              { accountCode: '2040', debit: 0, credit: totalAmountCents },
+            ],
+            createdBy: userId,
+            session: s,
+          });
+        }
 
         supplier.currentBalanceCents = (supplier.currentBalanceCents || 0) + totalAmountCents;
         await supplier.save({ session: s });
 
-        const billNumber = generateNumber('BIL');
+        const billNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'BIL', s);
         [bill] = await SupplierBill.create(
           [
             {
@@ -328,23 +371,37 @@ export async function createGrn({
           { session: s }
         );
       } else {
-        // Immediate payment method
-        const paymentAccount = ledgerService.accountForMethod(paymentType);
-        await ledgerService.postJournal({
-          tenantId,
-          branchId,
-          referenceType: 'purchase',
-          referenceId: grnNumber,
-          description: `GRN ${grnNumber} from ${supplier.name} paid via ${paymentType}`,
-          lines: [
-            { accountCode: '1050', debit: totalAmountCents, credit: 0 },
-            { accountCode: paymentAccount, debit: 0, credit: totalAmountCents },
-          ],
-          createdBy: userId,
-          session: s,
-        });
+        // Immediate payment method: post journal only if total > 0
+        if (totalAmountCents > 0) {
+          const paymentAccount = ledgerService.accountForMethod(paymentType);
+          await ledgerService.postJournal({
+            tenantId,
+            branchId,
+            referenceType: 'purchase',
+            referenceId: grnNumber,
+            description: `GRN ${grnNumber} from ${supplier.name} paid via ${paymentType}`,
+            lines: [
+              { accountCode: '1050', debit: totalAmountCents, credit: 0 },
+              { accountCode: paymentAccount, debit: 0, credit: totalAmountCents },
+            ],
+            createdBy: userId,
+            session: s,
+          });
 
-        const billNumber = generateNumber('BIL');
+          // paymentType cash: update open cash session through financeService (as cash-out with reason "GRN <number>")
+          if (paymentType === 'cash') {
+            await financeService.recordCashOut({
+              tenantId,
+              branchId,
+              amountCents: totalAmountCents,
+              reason: `GRN ${grnNumber}`,
+              userId,
+              session: s,
+            });
+          }
+        }
+
+        const billNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'BIL', s);
         [bill] = await SupplierBill.create(
           [
             {
@@ -364,23 +421,25 @@ export async function createGrn({
           { session: s }
         );
 
-        const paymentNumber = generateNumber('SPY');
-        await SupplierPayment.create(
-          [
-            {
-              branchId,
-              paymentNumber,
-              supplierId: supplier._id,
-              billId: bill._id,
-              amountCents: totalAmountCents,
-              paymentMethod: paymentType,
-              reference: grnNumber,
-              notes: 'Immediate payment upon delivery',
-              paidBy: userId,
-            },
-          ],
-          { session: s }
-        );
+        if (totalAmountCents > 0) {
+          const paymentNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'SPY', s);
+          await SupplierPayment.create(
+            [
+              {
+                branchId,
+                paymentNumber,
+                supplierId: supplier._id,
+                billId: bill._id,
+                amountCents: totalAmountCents,
+                paymentMethod: paymentType,
+                reference: grnNumber,
+                notes: 'Immediate payment upon delivery',
+                paidBy: userId,
+              },
+            ],
+            { session: s }
+          );
+        }
       }
 
       return { grn, bill };
@@ -428,7 +487,7 @@ export async function paySupplier({
       supplier.currentBalanceCents = Math.max(0, (supplier.currentBalanceCents || 0) - paymentAmount);
       await supplier.save({ session: s });
 
-      const paymentNumber = generateNumber('SPY');
+      const paymentNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'SPY', s);
       const [payment] = await SupplierPayment.create(
         [
           {
@@ -489,7 +548,7 @@ export async function createPurchaseReturn({
         throw badRequest('Purchase return must contain items');
       }
 
-      const returnNumber = generateNumber('PRT');
+      const returnNumber = await DocumentSequence.getNextNumber(tenantId, branchId, 'PRT', s);
       let totalAmountCents = 0;
       const processedItems = [];
 
@@ -502,29 +561,30 @@ export async function createPurchaseReturn({
         const itemTotalCost = qty * unitCostCents;
         totalAmountCents += itemTotalCost;
 
-        // Deduct stock atomically
-        await stockService.adjustStockLevel({
-          tenantId,
-          productId: product._id,
-          branchId,
-          type: 'purchase_return',
-          qtyChange: -qty,
-          unitCostCents,
-          referenceType: 'purchase_return',
-          referenceId: returnNumber,
-          note: `Return to supplier ${supplier.name}: ${notes}`,
-          userId,
-          session: s,
-        });
-
-        // If IMEIs provided, transition status to with_supplier
-        if (Array.isArray(item.imeis)) {
+        // If non-serialised, deduct stock atomically via adjustStockLevel
+        if (!Array.isArray(item.imeis) || item.imeis.length === 0) {
+          await stockService.adjustStockLevel({
+            tenantId,
+            productId: product._id,
+            branchId,
+            type: 'purchase_return',
+            qtyChange: -qty,
+            unitCostCents,
+            referenceType: 'purchase_return',
+            referenceId: returnNumber,
+            note: `Return to supplier ${supplier.name}: ${notes}`,
+            userId,
+            session: s,
+          });
+        } else {
+          // Serialised: transitionStatus moves stock level (-1) atomically for each unit
           for (const imei of item.imeis) {
             await imeiService.transitionStatus({
               tenantId,
               imei,
               newStatus: 'with_supplier',
               branchId,
+              reason: item.reason || notes || 'Purchase return to supplier',
               userId,
               session: s,
             });

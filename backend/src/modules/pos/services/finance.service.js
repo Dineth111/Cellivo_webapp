@@ -128,6 +128,42 @@ export async function recordCashMovement({ tenantId, sessionId, type, amountCent
   });
 }
 
+export async function recordCashOut({ tenantId, branchId, amountCents, reason, userId = null, session = null }) {
+  const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
+  const bid = branchId ? (branchId instanceof mongoose.Types.ObjectId ? branchId : new mongoose.Types.ObjectId(String(branchId))) : null;
+  const amt = Math.round(Number(amountCents || 0));
+  if (amt <= 0) return null;
+
+  return await runWithContext({ tenantId: tid }, async () => {
+    const query = { tenantId: tid, status: 'open' };
+    if (bid) query.branchId = bid;
+
+    let targetSession = await CashSession.findOne(query).session(session);
+    if (!targetSession) return null;
+
+    targetSession.movements.push({
+      type: 'cash_out',
+      amountCents: amt,
+      reason: String(reason || 'Cash out').trim(),
+      time: new Date(),
+      userId: userId || null,
+    });
+
+    const totalCashIn = targetSession.movements
+      .filter((m) => m.type === 'cash_in')
+      .reduce((s, m) => s + m.amountCents, 0);
+    const totalCashOut = targetSession.movements
+      .filter((m) => m.type === 'cash_out')
+      .reduce((s, m) => s + m.amountCents, 0);
+
+    targetSession.expectedCashCents =
+      targetSession.openingFloatCents + (targetSession.cashSalesCents || 0) - (targetSession.cashRefundsCents || 0) + totalCashIn - totalCashOut;
+
+    await targetSession.save({ session });
+    return targetSession;
+  });
+}
+
 export async function updateSessionCashSale({ tenantId, branchId, amountCents, isRefund = false, session = null, userId = null }) {
   const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
   const bid = branchId ? (branchId instanceof mongoose.Types.ObjectId ? branchId : new mongoose.Types.ObjectId(String(branchId))) : null;

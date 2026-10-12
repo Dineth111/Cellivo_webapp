@@ -11,6 +11,7 @@ import SupplierBill from '../src/modules/inventory/models/SupplierBill.model.js'
 import SupplierPayment from '../src/modules/inventory/models/SupplierPayment.model.js';
 import PurchaseReturn from '../src/modules/inventory/models/PurchaseReturn.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
+import CashSession from '../src/modules/pos/models/CashSession.model.js';
 import { runWithContext } from '../src/core/tenantContext.js';
 
 beforeAll(startDb);
@@ -480,3 +481,239 @@ describe('F-08 Purchasing and Suppliers (PUR-01 to PUR-06)', () => {
     expect(reminderRes.body.data.count).toBe(1);
   });
 });
+
+describe('Dev 4 review: 7. Document numbers', () => {
+  it('assigns unique consecutive numbers for 20 parallel GRNs on the same branch', async () => {
+    const shop = await setupShop('docnum@cellivo.lk', 'Document Number Shop');
+
+    const supRes = await api('post', '/api/inventory/suppliers', shop.token).send({
+      name: 'Parallel Supplier',
+    });
+    const supplierId = supRes.body.data._id;
+
+    const prodRes = await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Bulk Item',
+      barcode: 'BULK-ITEM',
+      costPriceCents: 100000,
+      sellingPriceCents: 150000,
+    });
+    const productId = prodRes.body.data._id;
+
+    // Issue 20 parallel GRN requests
+    const promises = Array.from({ length: 20 }, (_, i) =>
+      api('post', '/api/inventory/grns', shop.token).send({
+        branchId: shop.branchId,
+        supplierId,
+        paymentType: 'credit',
+        items: [{ productId, qty: 1, unitCostCents: 100000 }],
+      })
+    );
+
+    const results = await Promise.all(promises);
+    for (const res of results) {
+      expect(res.status).toBe(201);
+    }
+
+    const grnNumbers = results.map((r) => r.body.data.grn.grnNumber);
+    const uniqueNumbers = new Set(grnNumbers);
+    expect(uniqueNumbers.size).toBe(20);
+    for (const num of grnNumbers) {
+      expect(num).toMatch(/^GRN-\d{6}$/);
+    }
+  });
+});
+
+describe('Dev 4 review: 8. GRN validation', () => {
+  it('validates unitCostCents must be a non-negative integer', async () => {
+    const shop = await setupShop('grncost@cellivo.lk', 'GRN Cost Validation Shop');
+    const supRes = await api('post', '/api/inventory/suppliers', shop.token).send({ name: 'Cost Supplier' });
+    const supplierId = supRes.body.data._id;
+    const prodRes = await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Test Product',
+      barcode: 'PROD-COST-VAL',
+      costPriceCents: 50000,
+      sellingPriceCents: 80000,
+    });
+    const productId = prodRes.body.data._id;
+
+    // Negative unit cost
+    const negRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId,
+      paymentType: 'credit',
+      items: [{ productId, qty: 1, unitCostCents: -500 }],
+    });
+    expect(negRes.status).toBe(400);
+    expect(negRes.body.message).toContain('unitCostCents must be a non-negative integer');
+
+    // Float unit cost
+    const floatRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId,
+      paymentType: 'credit',
+      items: [{ productId, qty: 1, unitCostCents: 12.34 }],
+    });
+    expect(floatRes.status).toBe(400);
+    expect(floatRes.body.message).toContain('unitCostCents must be a non-negative integer');
+  });
+
+  it('enforces PO validations: matching supplier, status sent/partially_received, product presence, and quantity limits', async () => {
+    const shop = await setupShop('grnpo@cellivo.lk', 'GRN PO Validation Shop');
+    const supA = (await api('post', '/api/inventory/suppliers', shop.token).send({ name: 'Supplier A' })).body.data._id;
+    const supB = (await api('post', '/api/inventory/suppliers', shop.token).send({ name: 'Supplier B' })).body.data._id;
+
+    const prod1 = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'PO Item 1',
+      barcode: 'PO-ITEM-1',
+      costPriceCents: 100000,
+      sellingPriceCents: 150000,
+    })).body.data._id;
+
+    const prod2 = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'PO Item 2',
+      barcode: 'PO-ITEM-2',
+      costPriceCents: 200000,
+      sellingPriceCents: 250000,
+    })).body.data._id;
+
+    // Create PO for Supplier A with Prod 1 (qty: 5)
+    const po = (await api('post', '/api/inventory/purchase-orders', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      items: [{ productId: prod1, qty: 5, unitCostCents: 100000 }],
+    })).body.data;
+
+    // 1. PO status is 'draft' -> cannot receive
+    const draftRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod1, qty: 2, unitCostCents: 100000 }],
+    });
+    expect(draftRes.status).toBe(400);
+    expect(draftRes.body.message).toContain('sent');
+
+    // Update PO to 'sent'
+    await api('patch', `/api/inventory/purchase-orders/${po._id}/status`, shop.token).send({ status: 'sent' });
+
+    // 2. Supplier mismatch: GRN sends supB for PO of supA
+    const supMismatchRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supB,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod1, qty: 2, unitCostCents: 100000 }],
+    });
+    expect(supMismatchRes.status).toBe(400);
+    expect(supMismatchRes.body.message).toContain('Supplier does not match');
+
+    // 3. Product not on PO: trying to receive prod2 on this PO
+    const notOnPoRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod2, qty: 1, unitCostCents: 200000 }],
+    });
+    expect(notOnPoRes.status).toBe(400);
+    expect(notOnPoRes.body.message).toContain('not on the purchase order');
+
+    // 4. Quantity exceeds ordered - received (ordered 5, trying to receive 6)
+    const excessQtyRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod1, qty: 6, unitCostCents: 100000 }],
+    });
+    expect(excessQtyRes.status).toBe(400);
+    expect(excessQtyRes.body.message).toContain('exceeds remaining ordered quantity');
+
+    // Valid partial receive: receive 3
+    const validPartRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod1, qty: 3, unitCostCents: 100000 }],
+    });
+    expect(validPartRes.status).toBe(201);
+
+    // Remaining is 2, trying to receive 3 again should fail
+    const excessPartRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: supA,
+      purchaseOrderId: po._id,
+      paymentType: 'credit',
+      items: [{ productId: prod1, qty: 3, unitCostCents: 100000 }],
+    });
+    expect(excessPartRes.status).toBe(400);
+    expect(excessPartRes.body.message).toContain('exceeds remaining ordered quantity');
+  });
+
+  it('skips ledger postJournal when GRN total is 0', async () => {
+    const shop = await setupShop('zerogrn@cellivo.lk', 'Zero GRN Shop');
+    const sup = (await api('post', '/api/inventory/suppliers', shop.token).send({ name: 'Free Sample Supplier' })).body.data._id;
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Sample Tester',
+      barcode: 'SAMPLE-TESTER',
+      costPriceCents: 0,
+      sellingPriceCents: 0,
+    })).body.data._id;
+
+    const grnRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: sup,
+      paymentType: 'cash',
+      items: [{ productId: prod, qty: 5, unitCostCents: 0 }],
+    });
+    expect(grnRes.status).toBe(201);
+    const grnNumber = grnRes.body.data.grn.grnNumber;
+
+    // Verify NO ledger journal was posted for this GRN
+    const journals = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceType: 'purchase', referenceId: grnNumber });
+    });
+    expect(journals).toHaveLength(0);
+  });
+
+  it('updates the open cash session as cash-out with reason GRN <number> when paymentType is cash', async () => {
+    const shop = await setupShop('cashgrn@cellivo.lk', 'Cash GRN Shop');
+    const sup = (await api('post', '/api/inventory/suppliers', shop.token).send({ name: 'Cash Supplier' })).body.data._id;
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Cash Paid Item',
+      barcode: 'CASH-PAID-ITEM',
+      costPriceCents: 40000,
+      sellingPriceCents: 60000,
+    })).body.data._id;
+
+    // Open cash drawer with 50,000 cents (500 LKR) float
+    const openRes = await api('post', '/api/pos/finance/drawer/open', shop.token).send({
+      openingFloatCents: 50000,
+      terminalId: 'pos-main',
+    });
+    expect(openRes.status).toBe(201);
+
+    // Create cash GRN for 2 items @ 40,000 cents = 80,000 cents
+    const grnRes = await api('post', '/api/inventory/grns', shop.token).send({
+      branchId: shop.branchId,
+      supplierId: sup,
+      paymentType: 'cash',
+      items: [{ productId: prod, qty: 2, unitCostCents: 40000 }],
+    });
+    expect(grnRes.status).toBe(201);
+    const grnNumber = grnRes.body.data.grn.grnNumber;
+
+    // Check open cash session: should have cash_out movement with reason "GRN <number>"
+    const sessionDoc = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await CashSession.findOne({ branchId: shop.branchId, status: 'open' });
+    });
+    expect(sessionDoc).toBeDefined();
+    const grnMovement = sessionDoc.movements.find((m) => m.reason === `GRN ${grnNumber}`);
+    expect(grnMovement).toBeDefined();
+    expect(grnMovement.type).toBe('cash_out');
+    expect(grnMovement.amountCents).toBe(80000);
+  });
+});
+
