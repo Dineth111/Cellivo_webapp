@@ -870,7 +870,7 @@ describe('POS review fixes, round 2', () => {
     expect(first.status).toBe(201);
     expect(await stockWith('490154203237518')).not.toBeNull();
     expect((await voidIt(first.body.data._id)).status).toBe(200);
-    expect(await stockWith('490154203237518')).toBeNull();
+    expect((await stockWith('490154203237518')).status).toBe('written_off');
 
     const second = await tradeInSale('356938035643809');
     expect(second.status).toBe(201);

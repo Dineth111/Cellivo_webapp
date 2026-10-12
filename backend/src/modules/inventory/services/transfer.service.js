@@ -56,10 +56,8 @@ export async function requestTransfer({
         throw badRequest('Source and destination branches cannot be the same');
       }
 
-      const [fromBranch, toBranch] = await Promise.all([
-        Branch.findById(fromBranchId).session(s),
-        Branch.findById(toBranchId).session(s),
-      ]);
+      const fromBranch = await Branch.findById(fromBranchId).session(s);
+      const toBranch = await Branch.findById(toBranchId).session(s);
 
       if (!fromBranch) throw notFound('Source branch not found');
       if (!toBranch) throw notFound('Destination branch not found');
@@ -213,10 +211,8 @@ export async function dispatchTransfer({
             });
           }
           item.imeis = scannedImeis;
-        }
-
-        if (dispatchQty > 0) {
-          // Atomically deduct stock from sending branch
+        } else if (dispatchQty > 0) {
+          // Atomically deduct stock from sending branch for non-serialised items
           await stockService.adjustStockLevel({
             tenantId,
             productId: item.productId,
@@ -307,10 +303,8 @@ export async function receiveTransfer({
 
             itemLine.receivedImeis.push(imei);
           }
-        }
-
-        if (newlyReceivedQty > 0) {
-          // Increment stock at receiving branch
+        } else if (newlyReceivedQty > 0) {
+          // Increment stock at receiving branch for non-serialised items
           await stockService.adjustStockLevel({
             tenantId,
             productId: itemLine.productId,
@@ -388,7 +382,17 @@ export async function cancelTransfer({
       if (transfer.status === 'dispatched') {
         // Reverse dispatched stock and IMEIs back to source branch
         for (const item of transfer.items) {
-          if (item.dispatchedQty > 0) {
+          if (Array.isArray(item.imeis) && item.imeis.length > 0) {
+            for (const imei of item.imeis) {
+              await imeiService.transitionStatus({
+                tenantId,
+                imei,
+                newStatus: 'in_stock',
+                userId,
+                session: s,
+              });
+            }
+          } else if (item.dispatchedQty > 0) {
             await stockService.adjustStockLevel({
               tenantId,
               productId: item.productId,
@@ -402,18 +406,6 @@ export async function cancelTransfer({
               userId,
               session: s,
             });
-          }
-
-          if (Array.isArray(item.imeis)) {
-            for (const imei of item.imeis) {
-              await imeiService.transitionStatus({
-                tenantId,
-                imei,
-                newStatus: 'in_stock',
-                userId,
-                session: s,
-              });
-            }
           }
         }
       }
