@@ -8,6 +8,7 @@ import StockMovement from '../src/modules/inventory/models/StockMovement.model.j
 import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import StockAdjustment from '../src/modules/inventory/models/StockAdjustment.model.js';
 import StockCount from '../src/modules/inventory/models/StockCount.model.js';
+import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import { runWithContext } from '../src/core/tenantContext.js';
 
 beforeAll(startDb);
@@ -284,3 +285,240 @@ describe('F-06 Low Stock Items & CSV Import', () => {
     expect(countAfterSuccess).toBe(3);
   });
 });
+
+describe('Dev 4 review: 4. One state machine (transitionStatus)', () => {
+  it('rejects invalid state transition during adjustment and confirms no direct unit.status = remain', async () => {
+    const shop = await setupShop('statemachine@cellivo.lk', 'State Machine Shop');
+    const imei = '357999001111111';
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'State Machine Phone',
+      barcode: 'PHONE-SM-1',
+      isSerialised: true,
+      sellingPriceCents: 10000000,
+      costPriceCents: 6000000,
+    })).body.data;
+
+    // Create a unit that is already 'written_off'
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId: shop.tenantId,
+        branchId: shop.branchId,
+        productId: prod._id,
+        imei1: imei,
+        status: 'written_off',
+        unitCostCents: 6000000,
+      });
+    });
+
+    // Attempting to decrease (write off) an already written-off unit -> rejected by transitionStatus
+    const res = await api('post', '/api/inventory/adjustments', shop.token).send({
+      branchId: shop.branchId,
+      productId: prod._id,
+      adjustmentType: 'decrease',
+      qty: 1,
+      reason: 'damage',
+      imei,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('Cannot transition IMEI');
+  });
+});
+
+describe('Dev 4 review: 5. Ledger for adjustments and stock counts', () => {
+  it('posts Dr 5040 / Cr 1050 for loss and Dr 1050 / Cr 5040 for gain in the same transaction as stock change', async () => {
+    const shop = await setupShop('ledger-adj@cellivo.lk', 'Ledger Adjustment Shop');
+
+    const seeded = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await seedStock({
+        branchId: shop.branchId,
+        barcode: 'LEDGER-ITEM-01',
+        name: 'USB-C Cable',
+        sellingPriceCents: 200000,
+        costPriceCents: 50000,
+        qty: 10,
+      });
+    });
+
+    // 1. Loss adjustment: 2 units lost (2 * 50000 = 100000 cents)
+    const lossRes = await api('post', '/api/inventory/adjustments', shop.token).send({
+      branchId: shop.branchId,
+      productId: seeded.product._id,
+      adjustmentType: 'decrease',
+      qty: 2,
+      reason: 'loss',
+      notes: 'Lost during transit',
+    });
+    expect(lossRes.status).toBe(201);
+
+    const lossEntries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceType: 'stock_adjustment', referenceId: lossRes.body.data.adjustmentNumber });
+    });
+    expect(lossEntries).toHaveLength(1);
+    const lossLines = lossEntries[0].lines;
+    const debitLoss = lossLines.find((l) => l.accountCode === '5040');
+    const creditLoss = lossLines.find((l) => l.accountCode === '1050');
+    expect(debitLoss.debit).toBe(100000);
+    expect(debitLoss.credit).toBe(0);
+    expect(creditLoss.credit).toBe(100000);
+    expect(creditLoss.debit).toBe(0);
+
+    // 2. Gain adjustment: 3 units found (3 * 50000 = 150000 cents)
+    const gainRes = await api('post', '/api/inventory/adjustments', shop.token).send({
+      branchId: shop.branchId,
+      productId: seeded.product._id,
+      adjustmentType: 'increase',
+      qty: 3,
+      reason: 'found',
+      notes: 'Found in back store',
+    });
+    expect(gainRes.status).toBe(201);
+
+    const gainEntries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceType: 'stock_adjustment', referenceId: gainRes.body.data.adjustmentNumber });
+    });
+    expect(gainEntries).toHaveLength(1);
+    const gainLines = gainEntries[0].lines;
+    const debitGain = gainLines.find((l) => l.accountCode === '1050');
+    const creditGain = gainLines.find((l) => l.accountCode === '5040');
+    expect(debitGain.debit).toBe(150000);
+    expect(debitGain.credit).toBe(0);
+    expect(creditGain.credit).toBe(150000);
+    expect(creditGain.debit).toBe(0);
+  });
+});
+
+describe('Dev 4 review: 6. Stock count approval recomputation & serial unit reconciliation', () => {
+  it('recomputes varianceQty at approval so a sale during count does not cause a double deduction', async () => {
+    const shop = await setupShop('count-recompute@cellivo.lk', 'Count Recompute Shop');
+
+    const seeded = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await seedStock({
+        branchId: shop.branchId,
+        barcode: 'MIDCOUNT-SALE',
+        name: 'Mid Count Item',
+        sellingPriceCents: 500000,
+        costPriceCents: 250000,
+        qty: 10,
+      });
+    });
+
+    // 1. Auditor starts stock count: expectedQty is 10
+    const startRes = await api('post', '/api/inventory/counts', shop.token).send({
+      branchId: shop.branchId,
+      notes: 'Audit with concurrent sale',
+    });
+    expect(startRes.status).toBe(201);
+    const countId = startRes.body.data._id;
+    const countNumber = startRes.body.data.countNumber;
+
+    // 2. Concurrent sale occurs during count: 2 units sold -> stock level drops to 8
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await StockLevel.updateOne(
+        { branchId: shop.branchId, productId: seeded.product._id },
+        { $inc: { qty: -2 } }
+      );
+    });
+
+    // 3. Auditor counted 8 units physically
+    await api('put', `/api/inventory/counts/${countId}`, shop.token).send({
+      items: [{ productId: seeded.product._id, countedQty: 8 }],
+      status: 'completed',
+    });
+
+    // 4. Manager approves stock count
+    const approveRes = await api('post', `/api/inventory/counts/${countId}/approve`, shop.token);
+    expect(approveRes.status).toBe(200);
+
+    // Variance should be recomputed against current StockLevel (8), resulting in 8 - 8 = 0 variance!
+    const item = approveRes.body.data.items[0];
+    expect(item.expectedQty).toBe(8);
+    expect(item.varianceQty).toBe(0);
+
+    // Stock level must remain 8 (NO double deduction)
+    const sl = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await StockLevel.findOne({ branchId: shop.branchId, productId: seeded.product._id });
+    });
+    expect(sl.qty).toBe(8);
+  });
+
+  it('reconciles serialised products on count approval: marks missing units written_off and reports unknown scanned IMEIs', async () => {
+    const shop = await setupShop('count-serial@cellivo.lk', 'Serial Count Shop');
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Audit Phone Pro',
+      barcode: 'AUDIT-PHONE',
+      isSerialised: true,
+      sellingPriceCents: 10000000,
+      costPriceCents: 6000000,
+    })).body.data;
+
+    const imei1 = '358000000000001';
+    const imei2 = '358000000000002';
+    const imei3 = '358000000000003';
+    const unknownImei = '999999999999999';
+
+    // Seed 3 serial units in stock
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await SerialUnit.insertMany([
+        { tenantId: shop.tenantId, branchId: shop.branchId, productId: prod._id, imei1, status: 'in_stock', unitCostCents: 6000000 },
+        { tenantId: shop.tenantId, branchId: shop.branchId, productId: prod._id, imei1: imei2, status: 'in_stock', unitCostCents: 6000000 },
+        { tenantId: shop.tenantId, branchId: shop.branchId, productId: prod._id, imei1: imei3, status: 'in_stock', unitCostCents: 6000000 },
+      ]);
+      await StockLevel.create({
+        tenantId: shop.tenantId,
+        branchId: shop.branchId,
+        productId: prod._id,
+        qty: 3,
+        averageCostCents: 6000000,
+      });
+    });
+
+    // 1. Start stock count
+    const startRes = await api('post', '/api/inventory/counts', shop.token).send({
+      branchId: shop.branchId,
+      notes: 'Serial stock count',
+    });
+    const countId = startRes.body.data._id;
+
+    // 2. Auditor scans imei1 and imei2, PLUS unknownImei (imei3 was not scanned -> missing)
+    await api('put', `/api/inventory/counts/${countId}`, shop.token).send({
+      items: [
+        {
+          productId: prod._id,
+          scannedImeis: [imei1, imei2, unknownImei],
+        },
+      ],
+      status: 'completed',
+    });
+
+    // 3. Approve count
+    const approveRes = await api('post', `/api/inventory/counts/${countId}/approve`, shop.token);
+    expect(approveRes.status).toBe(200);
+
+    const approvedItem = approveRes.body.data.items.find((i) => String(i.productId) === String(prod._id));
+    expect(approvedItem.unknownImeis).toContain(unknownImei);
+
+    // 4. Verify imei3 is now written_off
+    const missingUnit = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await SerialUnit.findOne({ imei1: imei3 });
+    });
+    expect(missingUnit.status).toBe('written_off');
+
+    // 5. Verify unknown IMEI was NOT created in SerialUnit
+    const unknownUnit = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await SerialUnit.findOne({ imei1: unknownImei });
+    });
+    expect(unknownUnit).toBeNull();
+
+    // 6. Verify ledger entry was posted for the missing unit write-off
+    const imeiJournals = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await LedgerEntry.find({ referenceType: 'stock_adjustment', referenceId: imei3 });
+    });
+    expect(imeiJournals).toHaveLength(1);
+    expect(imeiJournals[0].lines.find((l) => l.accountCode === '5040').debit).toBe(6000000);
+    expect(imeiJournals[0].lines.find((l) => l.accountCode === '1050').credit).toBe(6000000);
+  });
+});
+
+

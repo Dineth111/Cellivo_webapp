@@ -31,9 +31,9 @@ export function validateImei(imei, fieldName = 'IMEI') {
  */
 export const ALLOWED_TRANSITIONS = {
   in_stock: ['reserved', 'sold', 'in_transit', 'with_supplier', 'written_off', 'in_repair'],
-  reserved: ['in_stock', 'sold', 'written_off', 'with_supplier', 'in_repair', 'in_transit'],
-  sold: ['returned'],
-  in_transit: ['in_stock'],
+  reserved: ['in_stock', 'sold', 'written_off', 'with_supplier', 'in_repair', 'in_transit', 'reserved'],
+  sold: ['returned', 'in_stock', 'written_off', 'with_supplier'],
+  in_transit: ['in_stock', 'written_off'],
   returned: ['in_stock', 'written_off', 'with_supplier'],
   with_supplier: ['in_stock', 'written_off'],
   in_repair: ['in_stock', 'written_off'],
@@ -75,18 +75,17 @@ export async function transitionStatus({
     const allowed = ALLOWED_TRANSITIONS[currentStatus] || [];
 
     // Check transition validity
-    if (!allowed.includes(newStatus) && currentStatus !== newStatus) {
+    if (!allowed.includes(newStatus)) {
       throw badRequest(`Cannot transition IMEI from '${currentStatus}' to '${newStatus}'`);
     }
 
     const now = new Date();
 
-    // Specific rules for transition
+    unit.status = newStatus;
     if (newStatus === 'reserved') {
       if (currentStatus === 'reserved' && unit.reservation?.reservedUntil > now && unit.reservation.cartId !== cartId) {
         throw badRequest(`IMEI ${imei} is already reserved by another transaction`);
       }
-      unit.status = 'reserved';
       unit.reservation = {
         cartId: cartId || null,
         reservedUntil: new Date(Date.now() + 15 * 60 * 1000),
@@ -98,13 +97,8 @@ export async function transitionStatus({
           throw badRequest(`IMEI ${imei} is reserved by another cart`, 'V-05');
         }
       }
-      unit.status = 'sold';
-      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
-    } else if (newStatus === 'in_stock') {
-      unit.status = 'in_stock';
       unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
     } else {
-      unit.status = newStatus;
       unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
     }
 
@@ -210,29 +204,16 @@ export async function transitionStatus({
  */
 export async function reserveImei(tenantId, branchId, imei, cartId = null, minutes = 15, userId = null, session = null) {
   return await withTenant(tenantId, async () => {
-    const unit = await SerialUnit.findOne({
+    const unit = await transitionStatus({
+      tenantId,
+      imei,
+      newStatus: 'reserved',
+      cartId,
       branchId,
-      $or: [{ imei1: imei }, { imei2: imei }],
-    }).session(session);
-
-    if (!unit) throw badRequest(`IMEI ${imei} not found at this branch`);
-    if (unit.status === 'sold') throw badRequest(`IMEI ${imei} is already sold`);
-
-    const now = new Date();
-    if (unit.status === 'reserved' && unit.reservation?.reservedUntil > now) {
-      if (cartId && unit.reservation.cartId && unit.reservation.cartId !== cartId) {
-        throw badRequest(`IMEI ${imei} is already reserved by another transaction`);
-      }
-    }
-
-    unit.status = 'reserved';
-    unit.reservation = {
-      cartId: cartId || null,
-      reservedUntil: new Date(Date.now() + minutes * 60 * 1000),
-      reservedBy: userId || null,
-    };
-    await unit.save({ session });
-    return { success: true, imei, reservedUntil: unit.reservation.reservedUntil, cartId };
+      userId,
+      session,
+    });
+    return { success: true, imei, reservedUntil: unit.reservation?.reservedUntil, cartId };
   });
 }
 
@@ -249,9 +230,13 @@ export async function releaseImei(tenantId, branchId, imei, session = null) {
     if (!unit) return { success: false };
 
     if (unit.status === 'reserved') {
-      unit.status = 'in_stock';
-      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
-      await unit.save({ session });
+      await transitionStatus({
+        tenantId,
+        imei,
+        newStatus: 'in_stock',
+        branchId,
+        session,
+      });
     }
     return { success: true, imei };
   });

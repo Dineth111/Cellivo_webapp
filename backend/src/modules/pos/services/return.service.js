@@ -247,17 +247,16 @@ export async function processReturn({
 
         await creditNote.save({ session });
 
-        // Restock resellable items
+        // Restock returned items according to condition
         for (const item of validatedReturnItems) {
-          if (item.condition === 'Resellable') {
-            await stockAdapter.restockReturn(
-              tid,
-              bid || invoice.branchId,
-              item.imei || item.barcode || item.productId,
-              item.qty,
-              session
-            );
-          }
+          await stockAdapter.restockReturn(
+            tid,
+            bid || invoice.branchId,
+            item.imei || item.barcode || item.productId,
+            item.qty,
+            session,
+            item.condition
+          );
         }
 
         // Post Double-Entry Ledger entries

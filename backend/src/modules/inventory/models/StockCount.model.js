@@ -12,6 +12,7 @@ const stockCountItemSchema = new mongoose.Schema(
     unitCostCents: { type: Number, default: 0 },
     varianceCostCents: { type: Number, default: 0 },
     scannedImeis: { type: [String], default: [] },
+    unknownImeis: { type: [String], default: [] },
   },
   { _id: true }
 );

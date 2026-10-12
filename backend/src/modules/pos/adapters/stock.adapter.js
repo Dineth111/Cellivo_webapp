@@ -172,9 +172,14 @@ export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, se
         throw badRequest(`IMEI ${barcodeOrImei} is not sellable (status: ${unit.status})`, 'V-05');
       }
 
-      unit.status = 'sold';
-      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
-      await unit.save({ session });
+      await imeiService.transitionStatus({
+        tenantId,
+        imei: barcodeOrImei,
+        newStatus: 'sold',
+        cartId,
+        branchId,
+        session,
+      });
 
       const { stockLevel } = await stockService.adjustStockLevel({
         tenantId,
@@ -224,8 +229,13 @@ export async function deductStock(tenantId, branchId, barcodeOrImei, qty = 1, se
 /**
  * Restock inventory upon a return or void.
  */
-export async function restockReturn(tenantId, branchId, barcodeOrImei, qty = 1, session = null) {
+export async function restockReturn(tenantId, branchId, barcodeOrImei, qty = 1, session = null, condition = 'Resellable') {
   return await withTenant(tenantId, async () => {
+    const cond = String(condition || 'Resellable').toLowerCase().replace(/\s+/g, '_');
+    let targetStatus = 'in_stock';
+    if (cond === 'damaged') targetStatus = 'written_off';
+    else if (cond === 'to_supplier') targetStatus = 'with_supplier';
+
     // Try IMEI first
     const unit = await SerialUnit.findOne({
       branchId,
@@ -233,48 +243,64 @@ export async function restockReturn(tenantId, branchId, barcodeOrImei, qty = 1, 
     }).session(session);
 
     if (unit) {
-      unit.status = 'in_stock';
-      unit.reservation = { cartId: null, reservedUntil: null, reservedBy: null };
-      await unit.save({ session });
-
-      const { stockLevel } = await stockService.adjustStockLevel({
+      await imeiService.transitionStatus({
         tenantId,
-        productId: unit.productId,
-        branchId,
-        type: 'sale_return',
-        qtyChange: 1,
-        unitCostCents: unit.unitCostCents,
-        referenceType: 'return',
         imei: barcodeOrImei,
+        newStatus: targetStatus,
+        branchId,
         session,
       });
 
+      if (targetStatus === 'in_stock') {
+        const { stockLevel } = await stockService.adjustStockLevel({
+          tenantId,
+          productId: unit.productId,
+          branchId,
+          type: 'sale_return',
+          qtyChange: 1,
+          unitCostCents: unit.unitCostCents,
+          referenceType: 'return',
+          imei: barcodeOrImei,
+          session,
+        });
+
+        const product = await Product.findById(unit.productId).session(session).lean();
+        return {
+          success: true,
+          product: { ...product, qty: stockLevel.qty, costPriceCents: unit.unitCostCents || stockLevel.averageCostCents },
+          restockedQty: 1,
+        };
+      }
+
       const product = await Product.findById(unit.productId).session(session).lean();
+      const stockLevel = await StockLevel.findOne({ branchId, productId: unit.productId }).session(session).lean();
       return {
         success: true,
-        product: { ...product, qty: stockLevel.qty, costPriceCents: unit.unitCostCents || stockLevel.averageCostCents },
-        restockedQty: 1,
+        product: { ...product, qty: stockLevel?.qty || 0, costPriceCents: unit.unitCostCents || product?.costPriceCents || 0 },
+        restockedQty: 0,
       };
     }
 
     // Otherwise barcode
-    const product = await Product.findOne({ barcode: barcodeOrImei, isArchived: false }).session(session);
-    if (product) {
-      const { stockLevel } = await stockService.adjustStockLevel({
-        tenantId,
-        productId: product._id,
-        branchId,
-        type: 'sale_return',
-        qtyChange: qty,
-        referenceType: 'return',
-        session,
-      });
+    if (targetStatus === 'in_stock') {
+      const product = await Product.findOne({ barcode: barcodeOrImei, isArchived: false }).session(session);
+      if (product) {
+        const { stockLevel } = await stockService.adjustStockLevel({
+          tenantId,
+          productId: product._id,
+          branchId,
+          type: 'sale_return',
+          qtyChange: qty,
+          referenceType: 'return',
+          session,
+        });
 
-      return {
-        success: true,
-        product: { ...product.toObject(), qty: stockLevel.qty, costPriceCents: stockLevel.averageCostCents },
-        restockedQty: qty,
-      };
+        return {
+          success: true,
+          product: { ...product.toObject(), qty: stockLevel.qty, costPriceCents: stockLevel.averageCostCents },
+          restockedQty: qty,
+        };
+      }
     }
 
     return { success: false, message: 'Item not found in stock to restock' };
@@ -323,9 +349,18 @@ export async function addTradeIn(tenantId, branchId, tradeInData, session = null
           { session }
         );
       } else {
-        unit.status = 'in_stock';
-        unit.branchId = branchId;
-        await unit.save({ session });
+        if (unit.status !== 'in_stock') {
+          await imeiService.transitionStatus({
+            tenantId,
+            imei,
+            newStatus: 'in_stock',
+            newBranchId: branchId,
+            session,
+          });
+        } else if (String(unit.branchId) !== String(branchId)) {
+          unit.branchId = branchId;
+          await unit.save({ session });
+        }
       }
     }
 

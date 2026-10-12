@@ -9,6 +9,7 @@ import Brand from '../models/Brand.model.js';
 import ProductModel from '../models/ProductModel.model.js';
 import * as stockService from '../services/stock.service.js';
 import * as imeiService from '../services/imei.service.js';
+import * as ledgerService from '../../pos/services/ledger.service.js';
 import { str, requireId, pageParams } from '../../../core/validate.js';
 import { badRequest, notFound } from '../../../core/errors.js';
 import { record as recordAudit } from '../../../core/audit.js';
@@ -59,35 +60,29 @@ export async function createAdjustment(req, res) {
       // Serialised item adjustment should provide IMEI if 1 unit
     }
 
-    const { stockLevel, movement } = await stockService.adjustStockLevel({
-      tenantId: tid,
-      productId,
-      branchId: branch._id,
-      type: adjustmentType === 'increase' ? 'adjustment_gain' : 'adjustment_loss',
-      qtyChange,
-      unitCostCents: product.costPriceCents,
-      referenceType: 'adjustment',
-      referenceId: adjustmentNumber,
-      imei: imei || '',
-      note: `${reason}: ${notes}`,
-      userId: req.auth.userId,
-      session,
-    });
-
     if (imei) {
       if (adjustmentType === 'decrease') {
-        const unit = await SerialUnit.findOne({ imei1: imei, branchId: branch._id }).session(session);
-        if (unit) {
-          unit.status = 'written_off';
-          unit.notes = `Adjusted out (${reason}): ${notes}`;
-          await unit.save({ session });
-        }
+        await imeiService.transitionStatus({
+          tenantId: tid,
+          imei,
+          newStatus: 'written_off',
+          branchId: branch._id,
+          reason: `${reason}: ${notes}`,
+          userId: req.auth.userId,
+          session,
+        });
       } else {
-        let unit = await SerialUnit.findOne({ imei1: imei }).session(session);
+        const unit = await SerialUnit.findOne({ imei1: imei }).session(session);
         if (unit) {
-          unit.status = 'in_stock';
-          unit.branchId = branch._id;
-          await unit.save({ session });
+          await imeiService.transitionStatus({
+            tenantId: tid,
+            imei,
+            newStatus: 'in_stock',
+            branchId: branch._id,
+            reason: `${reason}: ${notes}`,
+            userId: req.auth.userId,
+            session,
+          });
         } else {
           await SerialUnit.create(
             [
@@ -102,6 +97,85 @@ export async function createAdjustment(req, res) {
             ],
             { session }
           );
+
+          await stockService.adjustStockLevel({
+            tenantId: tid,
+            productId,
+            branchId: branch._id,
+            type: 'adjustment_gain',
+            qtyChange: 1,
+            unitCostCents: product.costPriceCents,
+            referenceType: 'adjustment',
+            referenceId: adjustmentNumber,
+            imei,
+            note: `${reason}: ${notes}`,
+            userId: req.auth.userId,
+            session,
+          });
+
+          if (product.costPriceCents > 0) {
+            await ledgerService.postJournal({
+              tenantId: tid,
+              branchId: branch._id,
+              referenceType: 'stock_adjustment',
+              referenceId: adjustmentNumber,
+              description: `Stock adjustment gain ${adjustmentNumber} (${reason})`,
+              lines: [
+                { accountCode: '1050', debit: product.costPriceCents, credit: 0 },
+                { accountCode: '5040', debit: 0, credit: product.costPriceCents },
+              ],
+              createdBy: req.auth.userId,
+              session,
+            });
+          }
+        }
+      }
+    } else {
+      await stockService.adjustStockLevel({
+        tenantId: tid,
+        productId,
+        branchId: branch._id,
+        type: adjustmentType === 'increase' ? 'adjustment_gain' : 'adjustment_loss',
+        qtyChange,
+        unitCostCents: product.costPriceCents,
+        referenceType: 'adjustment',
+        referenceId: adjustmentNumber,
+        imei: '',
+        note: `${reason}: ${notes}`,
+        userId: req.auth.userId,
+        session,
+      });
+
+      const totalCost = qty * (product.costPriceCents || 0);
+      if (totalCost > 0) {
+        if (adjustmentType === 'decrease') {
+          await ledgerService.postJournal({
+            tenantId: tid,
+            branchId: branch._id,
+            referenceType: 'stock_adjustment',
+            referenceId: adjustmentNumber,
+            description: `Stock adjustment loss ${adjustmentNumber} (${reason})`,
+            lines: [
+              { accountCode: '5040', debit: totalCost, credit: 0 },
+              { accountCode: '1050', debit: 0, credit: totalCost },
+            ],
+            createdBy: req.auth.userId,
+            session,
+          });
+        } else {
+          await ledgerService.postJournal({
+            tenantId: tid,
+            branchId: branch._id,
+            referenceType: 'stock_adjustment',
+            referenceId: adjustmentNumber,
+            description: `Stock adjustment gain ${adjustmentNumber} (${reason})`,
+            lines: [
+              { accountCode: '1050', debit: totalCost, credit: 0 },
+              { accountCode: '5040', debit: 0, credit: totalCost },
+            ],
+            createdBy: req.auth.userId,
+            session,
+          });
         }
       }
     }
@@ -278,26 +352,111 @@ export async function approveStockCount(req, res) {
   session.startTransaction();
 
   try {
-    // Post adjustments for all items with non-zero variance
+    let totalVarianceQty = 0;
+    let totalVarianceCostCents = 0;
+
     for (const item of count.items) {
-      if (item.varianceQty !== 0) {
-        const type = item.varianceQty > 0 ? 'adjustment_gain' : 'adjustment_loss';
-        await stockService.adjustStockLevel({
-          tenantId: req.auth.tenantId,
-          productId: item.productId,
+      const product = await Product.findById(item.productId).session(session);
+      const currentLevel = await StockLevel.findOne({ branchId: count.branchId, productId: item.productId }).session(session);
+      const currentQty = currentLevel ? currentLevel.qty : 0;
+
+      // Recompute variance against CURRENT StockLevel.qty
+      item.expectedQty = currentQty;
+      item.varianceQty = item.countedQty - currentQty;
+      item.varianceCostCents = item.varianceQty * item.unitCostCents;
+      totalVarianceQty += item.varianceQty;
+      totalVarianceCostCents += item.varianceCostCents;
+
+      if (product?.isSerialised) {
+        // Serialised product: compare scanned IMEIs with in_stock serial units
+        const inStockUnits = await SerialUnit.find({
           branchId: count.branchId,
-          type,
-          qtyChange: item.varianceQty,
-          unitCostCents: item.unitCostCents,
-          referenceType: 'stock_count',
-          referenceId: count.countNumber,
-          note: `Stock count approval: ${count.countNumber}`,
-          userId: req.auth.userId,
-          session,
-        });
+          productId: item.productId,
+          status: 'in_stock',
+        }).session(session);
+
+        const inStockMap = new Map(inStockUnits.map((u) => [u.imei1, u]));
+        const scannedSet = new Set(item.scannedImeis || []);
+
+        // 1. Missing units: in_stock but not scanned -> written_off via transitionStatus
+        for (const [imei, unit] of inStockMap) {
+          if (!scannedSet.has(imei)) {
+            await imeiService.transitionStatus({
+              tenantId: req.auth.tenantId,
+              imei,
+              newStatus: 'written_off',
+              branchId: count.branchId,
+              reason: `Stock count missing: ${count.countNumber}`,
+              userId: req.auth.userId,
+              session,
+            });
+          }
+        }
+
+        // 2. Unknown scanned IMEIs: scanned but not in_stock -> reported, not created
+        const unknownImeis = [];
+        for (const scanned of (item.scannedImeis || [])) {
+          if (!inStockMap.has(scanned)) {
+            unknownImeis.push(scanned);
+          }
+        }
+        item.unknownImeis = unknownImeis;
+      } else {
+        // Non-serialised product adjustment
+        if (item.varianceQty !== 0) {
+          const type = item.varianceQty > 0 ? 'adjustment_gain' : 'adjustment_loss';
+          await stockService.adjustStockLevel({
+            tenantId: req.auth.tenantId,
+            productId: item.productId,
+            branchId: count.branchId,
+            type,
+            qtyChange: item.varianceQty,
+            unitCostCents: item.unitCostCents,
+            referenceType: 'stock_count',
+            referenceId: count.countNumber,
+            note: `Stock count approval: ${count.countNumber}`,
+            userId: req.auth.userId,
+            session,
+          });
+
+          const cost = Math.abs(item.varianceQty) * item.unitCostCents;
+          if (cost > 0) {
+            if (item.varianceQty < 0) {
+              await ledgerService.postJournal({
+                tenantId: req.auth.tenantId,
+                branchId: count.branchId,
+                referenceType: 'stock_adjustment',
+                referenceId: count.countNumber,
+                description: `Stock count loss ${count.countNumber}`,
+                lines: [
+                  { accountCode: '5040', debit: cost, credit: 0 },
+                  { accountCode: '1050', debit: 0, credit: cost },
+                ],
+                createdBy: req.auth.userId,
+                session,
+              });
+            } else {
+              await ledgerService.postJournal({
+                tenantId: req.auth.tenantId,
+                branchId: count.branchId,
+                referenceType: 'stock_adjustment',
+                referenceId: count.countNumber,
+                description: `Stock count gain ${count.countNumber}`,
+                lines: [
+                  { accountCode: '1050', debit: cost, credit: 0 },
+                  { accountCode: '5040', debit: 0, credit: cost },
+                ],
+                createdBy: req.auth.userId,
+                session,
+              });
+            }
+          }
+        }
       }
     }
 
+    count.totalVarianceQty = totalVarianceQty;
+    count.totalVarianceCostCents = totalVarianceCostCents;
     count.status = 'approved';
     count.approvedBy = req.auth.userId;
     count.approvedAt = new Date();
