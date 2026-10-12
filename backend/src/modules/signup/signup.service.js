@@ -13,6 +13,7 @@ import { hashPassword, passwordError, hashToken } from '../../core/password.js';
 import { badRequest, conflict, AppError } from '../../core/errors.js';
 import { config } from '../../core/config.js';
 import audit from '../../core/audit.js';
+import { notify } from '../notifications/services/notifications.service.js';
 
 /**
  * F-01 Registration and free trial (ACC-01 to ACC-04). No payment details are ever asked.
@@ -96,8 +97,13 @@ export async function start(b = {}) {
     { email, data, codeHash: codeHash(email, code), attempts: 0, expiresAt: new Date(Date.now() + CODE_MINUTES * 60_000) },
     { upsert: true }
   );
-  // TODO(Dev 5): send the code by email through the notification service (template "verification", ADM-25).
-  if (config.env !== 'production') console.log(`[dev] sign-up code for ${email}: ${code}`);
+  await notify({
+    tenantId: null,
+    channel: 'email',
+    to: email,
+    template: 'signup_verification',
+    data: { code, customer_name: name },
+  });
   return { email, expiresInMinutes: CODE_MINUTES, ...(config.env === 'test' && { devCode: code }) };
 }
 
@@ -110,8 +116,13 @@ export async function resend(emailRaw) {
   pending.codeHash = codeHash(email, code);
   pending.attempts = 0;
   pending.expiresAt = new Date(Date.now() + CODE_MINUTES * 60_000);
-  await pending.save();
-  if (config.env !== 'production') console.log(`[dev] sign-up code for ${email}: ${code}`);
+  await notify({
+    tenantId: null,
+    channel: 'email',
+    to: email,
+    template: 'signup_verification',
+    data: { code, customer_name: pending.data?.name || '' },
+  });
   return { email, expiresInMinutes: CODE_MINUTES, ...(config.env === 'test' && { devCode: code }) };
 }
 

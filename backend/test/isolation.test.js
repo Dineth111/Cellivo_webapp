@@ -23,6 +23,9 @@ import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
+import NotificationTemplate from '../src/modules/notifications/models/NotificationTemplate.model.js';
+import NotificationLog from '../src/modules/notifications/models/NotificationLog.model.js';
+import InAppNotification from '../src/modules/notifications/models/InAppNotification.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -51,6 +54,9 @@ const MODELS = {
   Cheque,
   Expense,
   LoyaltyTransaction,
+  NotificationTemplate,
+  NotificationLog,
+  InAppNotification,
 };
 
 async function twoShops() {

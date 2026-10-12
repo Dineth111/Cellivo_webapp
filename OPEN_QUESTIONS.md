@@ -39,6 +39,13 @@ Each item states the safe default that was implemented. Confirm or change.
 27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
 28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
 
+## Notifications review (Dev 5)
+
+29. **Pre-tenant emails.** Sign-up verification codes (`signup.service.js`) go directly to the email provider without writing a `NotificationLog` document, because every tenant model requires a `tenantId`. Confirm whether platform-level notification logs should be introduced in a separate collection.
+30. **Permissions for notifications.** `'notifications'` is not in `core/permissions.js` `MODULES`. Notification templates and delivery logs are currently guarded by `settings.view` and `settings.edit`. Confirm if Dev 1 should add `notifications` as a distinct module in `MODULES`.
+31. **Lockout notice to owner.** FRS F-03 lockout alert (line 45 in `auth.service.js`) remains unwired for Phase 1.
+32. **Platform events.** `new_lead`, `demo_booking`, and `system_threshold_breach` templates are provided in defaults, but triggers are not wired yet.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.

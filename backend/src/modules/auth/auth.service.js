@@ -7,6 +7,7 @@ import { badRequest, unauthorized } from '../../core/errors.js';
 import { config } from '../../core/config.js';
 import audit from '../../core/audit.js';
 import { createSession, revokeUserSessions } from './session.service.js';
+import { notify } from '../notifications/services/notifications.service.js';
 
 export const MAX_FAILED_LOGINS = 5;
 export const LOCK_MINUTES = 15;
@@ -108,8 +109,17 @@ export async function forgotPassword(email) {
   return runWithContext({ tenantId: user.tenantId, userId: user._id }, async () => {
     const token = await issueToken(user._id, 'reset', 30);
     await audit.record({ action: 'auth.password_reset_requested', entity: 'User', entityId: user._id });
-    // TODO(Dev 5): send by email through the notification service. Development only: log the link.
-    if (config.env !== 'production') console.log(`[dev] password reset link for ${email}: ${setPasswordLink('reset-password', token)}`);
+    await notify({
+      tenantId: user.tenantId,
+      channel: 'email',
+      to: email,
+      template: 'password_reset',
+      data: {
+        customer_name: user.name,
+        link: setPasswordLink('reset-password', token),
+      },
+      userId: user._id,
+    });
     return token;
   });
 }
