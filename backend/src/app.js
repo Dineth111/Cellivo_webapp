@@ -3,7 +3,8 @@ import cors from 'cors';
 import morgan from 'morgan';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { config } from './core/config.js';
+import { config, assertConfig } from './core/config.js';
+import connectDB from './core/db.js';
 import { errorHandler, notFoundHandler } from './core/errors.js';
 import healthRoutes from './modules/health/health.routes.js';
 import authRoutes from './modules/auth/auth.routes.js';
@@ -71,4 +72,21 @@ export function createApp() {
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;
+}
+
+// Vercel entry (default export). No listen() and no setInterval jobs: they cannot run serverless.
+// shortcut: billing / held-cart jobs don't run on Vercel, move them to Vercel Cron when needed.
+const app = createApp();
+let ready;
+
+export default async function handler(req, res) {
+  try {
+    assertConfig();
+    ready ??= connectDB().catch((e) => { ready = undefined; throw e; });
+    await ready;
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ message: 'Server not configured' });
+  }
+  return app(req, res);
 }
