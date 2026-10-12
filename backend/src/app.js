@@ -1,4 +1,5 @@
 import express from 'express';
+import mongoose from 'mongoose';
 import cors from 'cors';
 import morgan from 'morgan';
 import helmet from 'helmet';
@@ -82,6 +83,7 @@ let ready;
 export default async function handler(req, res) {
   try {
     assertConfig();
+    if (mongoose.connection.readyState === 0) ready = undefined; // connection dropped while the instance was idle
     ready ??= connectDB().catch((e) => { ready = undefined; throw e; });
     await ready;
   } catch (err) {
