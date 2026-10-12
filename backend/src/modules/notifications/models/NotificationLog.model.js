@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import tenantPlugin from '../../../core/tenantPlugin.js';
 
-export const NOTIFICATION_STATUSES = ['queued', 'sent', 'delivered', 'failed'];
+export const NOTIFICATION_STATUSES = ['queued', 'sending', 'sent', 'delivered', 'failed'];
 
 const notificationLogSchema = new mongoose.Schema(
   {
@@ -14,6 +14,7 @@ const notificationLogSchema = new mongoose.Schema(
     body: { type: String, required: true },
     data: { type: mongoose.Schema.Types.Mixed, default: {} },
     status: { type: String, enum: NOTIFICATION_STATUSES, default: 'queued', index: true },
+    lockedAt: { type: Date, default: null },
     creditsDeducted: { type: Number, default: 0 },
     partsCount: { type: Number, default: 1 },
     providerMessageId: { type: String, default: '' },

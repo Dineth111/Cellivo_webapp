@@ -13,7 +13,8 @@ import { processQueue, processItem } from '../src/modules/notifications/services
 import { calculateSmsParts, isUnicodeText } from '../src/modules/notifications/utils/smsCounter.js';
 import { maskPhone, maskEmail } from '../src/modules/notifications/utils/mask.js';
 import { buildWhatsAppLink } from '../src/modules/notifications/utils/whatsapp.js';
-import { setSmsProvider, resetProviders } from '../src/modules/notifications/providers/provider.interface.js';
+import { setSmsProvider, setEmailProvider, resetProviders } from '../src/modules/notifications/providers/provider.interface.js';
+import { forgotPassword } from '../src/modules/auth/auth.service.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -365,5 +366,146 @@ describe('Notification Service (F-18 Phase 1)', () => {
     // Shop B cannot resend Shop A's log (returns 404)
     const resendRes = await api('post', `/api/notifications/logs/${logAId}/resend`, b.token);
     expect(resendRes.status).toBe(404);
+  });
+
+  it('claims queued item atomically so concurrent processQueue calls invoke provider once and deduct credits once', async () => {
+    const shop = await signup('concurrent@shop.lk', 'Concurrent Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+
+    await runAsPlatform(async () => Tenant.updateOne({ _id: tenantId }, { smsCredits: 10 }));
+
+    let sendCallCount = 0;
+    setSmsProvider({
+      async send() {
+        sendCallCount++;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return { success: true, messageId: 'sms_concurrent' };
+      },
+    });
+
+    await notify({
+      tenantId,
+      channel: 'sms',
+      to: '+94771234567',
+      template: 'sale_completed',
+      data: { customer_name: 'Concurrent Customer' },
+    });
+
+    // Run processQueue twice concurrently
+    const [res1, res2] = await Promise.all([processQueue(), processQueue()]);
+
+    expect(sendCallCount).toBe(1);
+    expect(res1 + res2).toBe(1);
+
+    const updatedTenant = await runAsPlatform(async () => Tenant.findById(tenantId));
+    expect(updatedTenant.smsCredits).toBe(9); // exactly 1 credit deducted
+
+    const log = await runWithContext({ tenantId }, async () => NotificationLog.findOne());
+    expect(log.status).toBe('sent');
+    expect(log.creditsDeducted).toBe(1);
+  });
+
+  it('resets items stuck in sending for > 5 minutes back to queued', async () => {
+    const shop = await signup('stuck@shop.lk', 'Stuck Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+
+    await runAsPlatform(async () => Tenant.updateOne({ _id: tenantId }, { smsCredits: 5 }));
+
+    await runWithContext({ tenantId }, async () => {
+      await NotificationLog.create({
+        channel: 'sms',
+        recipient: '+947*****567',
+        payload: { to: '+94771234567', body: 'Stuck SMS' },
+        template: 'custom',
+        body: 'Stuck SMS',
+        status: 'sending',
+        lockedAt: new Date(Date.now() - 6 * 60 * 1000),
+      });
+    });
+
+    const processed = await processQueue();
+    expect(processed).toBe(1);
+
+    const log = await runWithContext({ tenantId }, async () => NotificationLog.findOne());
+    expect(log.status).toBe('sent');
+  });
+
+  it('does not store password reset links or tokens in NotificationLog, and logs API never returns tokens', async () => {
+    const shop = await signup('resetlog@shop.lk', 'Reset Log Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+
+    let sentEmail = null;
+    setEmailProvider({
+      async send(payload) {
+        sentEmail = payload;
+        return { success: true, messageId: 'email_reset_direct' };
+      },
+    });
+
+    const token = await forgotPassword('resetlog@shop.lk');
+    expect(token).toBeTruthy();
+    expect(sentEmail).toBeTruthy();
+    expect(sentEmail.text).toContain(token);
+
+    // No log entry created in NotificationLog
+    const logsCount = await runWithContext({ tenantId }, async () => NotificationLog.countDocuments());
+    expect(logsCount).toBe(0);
+
+    // Logs API never returns the reset token
+    const logsRes = await api('get', '/api/notifications/logs', shop.token);
+    expect(logsRes.status).toBe(200);
+    expect(JSON.stringify(logsRes.body)).not.toContain(token);
+  });
+
+  it('escapes merge-field values when building email HTML version', async () => {
+    let capturedEmail = null;
+    setEmailProvider({
+      async send(payload) {
+        capturedEmail = payload;
+        return { success: true, messageId: 'email_escaped' };
+      },
+    });
+
+    await notify({
+      tenantId: null,
+      channel: 'email',
+      to: 'escape@cellivo.lk',
+      template: 'Hello {customer_name},\nWelcome!',
+      data: { customer_name: '<script>alert("xss")</script> & Co' },
+    });
+
+    expect(capturedEmail).toBeTruthy();
+    expect(capturedEmail.text).toContain('<script>alert("xss")</script> & Co');
+    expect(capturedEmail.html).toContain('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt; &amp; Co');
+    expect(capturedEmail.html).not.toContain('<script>');
+  });
+
+  it('creates at most one NO_SMS_CREDITS in-app warning per tenant per day', async () => {
+    const shop = await signup('dailywarn@shop.lk', 'Daily Warning Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+
+    // Zero credits. Enqueue 3 SMS messages.
+    for (let i = 1; i <= 3; i++) {
+      await notify({
+        tenantId,
+        channel: 'sms',
+        to: `+9477000000${i}`,
+        template: 'sale_completed',
+        data: { customer_name: `Customer ${i}` },
+      });
+    }
+
+    const processed = await processQueue();
+    expect(processed).toBe(3);
+
+    // Exactly 1 warning in-app notification should exist
+    const warnings = await runWithContext({ tenantId }, async () =>
+      InAppNotification.find({ level: 'warning', title: 'SMS Delivery Failed' })
+    );
+    expect(warnings.length).toBe(1);
   });
 });

@@ -45,6 +45,7 @@ Each item states the safe default that was implemented. Confirm or change.
 30. **Permissions for notifications.** `'notifications'` is not in `core/permissions.js` `MODULES`. Notification templates and delivery logs are currently guarded by `settings.view` and `settings.edit`. Confirm if Dev 1 should add `notifications` as a distinct module in `MODULES`.
 31. **Lockout notice to owner.** FRS F-03 lockout alert (line 45 in `auth.service.js`) remains unwired for Phase 1.
 32. **Platform events.** `new_lead`, `demo_booking`, and `system_threshold_breach` templates are provided in defaults, but triggers are not wired yet.
+33. **Serverless queue worker trigger.** `backend/api/index.js` suggests a serverless deployment where `server.js` intervals do not run; the notification queue needs a scheduled trigger if so.
 
 ## Go-live checklist
 

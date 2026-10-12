@@ -12,40 +12,52 @@ import { formatRupees } from '../../pos/money.js';
  * Replace placeholders like {customer_name}, {amount}, {ticket_no} etc.
  * Uses {customer_name} as standard merge field.
  */
-export function renderTemplate(templateText, data = {}) {
+export function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Replace placeholders like {customer_name}, {amount}, {ticket_no} etc.
+ * Uses {customer_name} as standard merge field.
+ * Supports escaping merge-field values for HTML contexts.
+ */
+export function renderTemplate(templateText, data = {}, { escape = false } = {}) {
   if (!templateText || typeof templateText !== 'string') return '';
+  const formatVal = (v) => (escape ? escapeHtml(v) : String(v));
   return templateText.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => {
     if (data[key] !== undefined && data[key] !== null) {
-      return String(data[key]);
+      return formatVal(data[key]);
     }
     // Aliases & fallback mappings
-    if (key === 'customer_name') {
+    if (key === 'customer_name' || key === 'customer') {
       const name = data.customer_name || data.customer || data.name;
-      if (name) return String(name);
-    }
-    if (key === 'customer') {
-      const name = data.customer_name || data.customer || data.name;
-      if (name) return String(name);
+      if (name) return formatVal(name);
     }
     if (key === 'shop' || key === 'shop_name') {
       const s = data.shop || data.shop_name || data.shopName;
-      if (s) return String(s);
+      if (s) return formatVal(s);
     }
     if (key === 'invoice_no') {
       const inv = data.invoice_no || data.invoiceNo;
-      if (inv) return String(inv);
+      if (inv) return formatVal(inv);
     }
     if (key === 'ticket_no') {
       const t = data.ticket_no || data.ticketNo;
-      if (t) return String(t);
+      if (t) return formatVal(t);
     }
     if (key === 'due_date') {
       const d = data.due_date || data.dueDate;
-      if (d) return String(d);
+      if (d) return formatVal(d);
     }
     if (key === 'amount') {
-      if (data.amountCents != null) return formatRupees(data.amountCents);
-      if (data.amount != null) return String(data.amount);
+      if (data.amountCents != null) return formatVal(formatRupees(data.amountCents));
+      if (data.amount != null) return formatVal(data.amount);
     }
     return match;
   });
@@ -91,14 +103,16 @@ export async function resolveTemplate({ tenantId, eventOrTemplate, channel, lang
 
   const renderedSubject = renderTemplate(subject, data);
   const renderedBody = renderTemplate(body, data);
+  const renderedHtml = renderTemplate(body, data, { escape: true }).replace(/\n/g, '<br/>');
 
-  return { subject: renderedSubject, body: renderedBody };
+  return { subject: renderedSubject, body: renderedBody, html: renderedHtml };
 }
 
 /**
  * Primary notification dispatch service.
  * Enqueues tenant notifications into NotificationLog.
- * Pre-tenant emails go straight to provider without creating a NotificationLog row.
+ * Pre-tenant emails, password resets, and token-bearing emails go straight to provider
+ * without creating a NotificationLog row to prevent plaintext token storage.
  */
 export async function notify({
   tenantId,
@@ -119,7 +133,7 @@ export async function notify({
     }
   }
 
-  const { subject, body } = await resolveTemplate({
+  const { subject, body, html } = await resolveTemplate({
     tenantId,
     eventOrTemplate: template,
     channel,
@@ -127,14 +141,21 @@ export async function notify({
     data,
   });
 
-  // 2. Pre-tenant / platform emails (e.g. signup verification code)
-  if (!tenantId) {
+  const hasToken =
+    template === 'password_reset' ||
+    template === 'staff_invite' ||
+    Boolean(data.token) ||
+    (typeof data.link === 'string' && data.link.includes('token=')) ||
+    (typeof body === 'string' && body.includes('token='));
+
+  // 2. Pre-tenant / platform emails and security/token emails go straight to provider without creating a NotificationLog row
+  if (!tenantId || (channel === 'email' && hasToken)) {
     if (channel === 'email') {
       const res = await getEmailProvider().send({
         to,
-        subject: subject || 'Cellivo Verification',
+        subject: subject || (template === 'password_reset' ? 'Password Reset' : 'Cellivo Notification'),
         text: body,
-        html: data.html || body.replace(/\n/g, '<br/>'),
+        html: data.html || html || body.replace(/\n/g, '<br/>'),
       });
       return { success: true, messageId: res.messageId, direct: true };
     }
@@ -145,21 +166,36 @@ export async function notify({
   const masked = channel === 'in_app' ? (to || (userId ? `user:${userId}` : 'in_app')) : maskRecipient(to, channel);
   const partsCount = channel === 'sms' ? calculateSmsParts(body) : 1;
 
+  // Redact token from body/payload/data if ever stored
+  const redactToken = (text) =>
+    typeof text === 'string'
+      ? text.replace(/([?&]token=)[a-zA-Z0-9_\-]+/gi, '$1[REDACTED]')
+      : text;
+
+  const sanitizedBody = hasToken ? redactToken(body) : body;
+  const sanitizedData = hasToken
+    ? {
+        ...data,
+        ...(data.token ? { token: '[REDACTED]' } : {}),
+        ...(typeof data.link === 'string' ? { link: redactToken(data.link) } : {}),
+      }
+    : data;
+
   // 4. Enqueue into NotificationLog inside tenant context
   const logDoc = {
     channel,
     recipient: masked,
     payload: {
       to: String(to || ''),
-      body,
+      body: sanitizedBody,
       subject,
-      data,
+      data: { ...sanitizedData, html: sanitizedData.html || html },
     },
     template: typeof template === 'string' ? template : 'custom',
     event: DEFAULT_TEMPLATES[template] ? template : 'custom',
     subject,
-    body,
-    data,
+    body: sanitizedBody,
+    data: { ...sanitizedData, html: sanitizedData.html || html },
     status: 'queued',
     partsCount,
     creditsDeducted: 0,
@@ -233,6 +269,7 @@ export async function markAllInAppAsRead(userId) {
 }
 
 export default {
+  escapeHtml,
   renderTemplate,
   resolveTemplate,
   notify,

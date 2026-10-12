@@ -4,6 +4,7 @@ import InAppNotification from '../models/InAppNotification.model.js';
 import Tenant from '../../tenants/Tenant.model.js';
 import { calculateSmsParts } from '../utils/smsCounter.js';
 import { getSmsProvider, getEmailProvider } from '../providers/provider.interface.js';
+import { escapeHtml } from './notifications.service.js';
 
 let workerInterval = null;
 
@@ -15,6 +16,7 @@ export async function processItem(item) {
 
   if (channel === 'in_app') {
     await InAppNotification.create({
+      tenantId: item.tenantId,
       userId: item.userId || null,
       title: item.subject || 'Notification',
       body: item.body,
@@ -24,7 +26,7 @@ export async function processItem(item) {
     });
     await NotificationLog.updateOne(
       { _id: item._id },
-      { status: 'delivered', sentAt: new Date() }
+      { status: 'delivered', sentAt: new Date(), lockedAt: null }
     );
     return;
   }
@@ -44,7 +46,7 @@ export async function processItem(item) {
       );
 
       if (!tenant) {
-        // Insufficient credits: mark failed and alert via in-app notification
+        // Insufficient credits: mark failed and alert via in-app notification (max 1 per tenant per day)
         await NotificationLog.updateOne(
           { _id: item._id },
           {
@@ -52,16 +54,32 @@ export async function processItem(item) {
             errorReason: 'NO_SMS_CREDITS',
             partsCount,
             creditsDeducted: 0,
+            lockedAt: null,
           }
         );
 
-        await InAppNotification.create({
-          userId: item.userId || null,
-          title: 'SMS Delivery Failed',
-          body: 'SMS not sent: no credits left. Buy credits in Settings > Subscription.',
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        const existingWarning = await InAppNotification.findOne({
+          tenantId: item.tenantId,
           level: 'warning',
-          link: '/billing',
+          $or: [
+            { 'data.code': 'NO_SMS_CREDITS' },
+            { title: 'SMS Delivery Failed' },
+          ],
+          createdAt: { $gte: oneDayAgo },
         });
+
+        if (!existingWarning) {
+          await InAppNotification.create({
+            tenantId: item.tenantId,
+            userId: item.userId || null,
+            title: 'SMS Delivery Failed',
+            body: 'SMS not sent: no credits left. Buy credits in Settings > Subscription.',
+            level: 'warning',
+            link: '/billing',
+            data: { code: 'NO_SMS_CREDITS' },
+          });
+        }
         return;
       }
 
@@ -86,6 +104,7 @@ export async function processItem(item) {
           partsCount,
           providerMessageId: res.messageId || '',
           sentAt: new Date(),
+          lockedAt: null,
         }
       );
     } catch (err) {
@@ -98,11 +117,13 @@ export async function processItem(item) {
         await NotificationLog.updateOne(
           { _id: item._id },
           {
+            status: 'queued',
             retryCount: nextRetry,
             nextRetryAt: new Date(Date.now() + backoffMs),
             errorReason: err.message,
             partsCount,
             creditsDeducted: partsCount,
+            lockedAt: null,
           }
         );
       } else {
@@ -122,6 +143,7 @@ export async function processItem(item) {
             errorReason: err.message,
             creditsDeducted: 0,
             partsCount,
+            lockedAt: null,
           }
         );
       }
@@ -131,11 +153,16 @@ export async function processItem(item) {
 
   if (channel === 'email') {
     try {
+      const emailHtml =
+        item.data?.html ||
+        item.payload?.data?.html ||
+        (item.body ? escapeHtml(item.body).replace(/\n/g, '<br/>') : '');
+
       const res = await getEmailProvider().send({
         to: item.payload?.to || item.recipient,
         subject: item.subject || 'Notification',
         text: item.body,
-        html: item.data?.html || item.body.replace(/\n/g, '<br/>'),
+        html: emailHtml,
       });
 
       await NotificationLog.updateOne(
@@ -144,6 +171,7 @@ export async function processItem(item) {
           status: 'sent',
           providerMessageId: res.messageId || '',
           sentAt: new Date(),
+          lockedAt: null,
         }
       );
     } catch (err) {
@@ -155,9 +183,11 @@ export async function processItem(item) {
         await NotificationLog.updateOne(
           { _id: item._id },
           {
+            status: 'queued',
             retryCount: nextRetry,
             nextRetryAt: new Date(Date.now() + backoffMs),
             errorReason: err.message,
+            lockedAt: null,
           }
         );
       } else {
@@ -167,6 +197,7 @@ export async function processItem(item) {
             status: 'failed',
             retryCount: nextRetry,
             errorReason: err.message,
+            lockedAt: null,
           }
         );
       }
@@ -176,30 +207,53 @@ export async function processItem(item) {
 
 /**
  * Queue worker: reads queued items across all tenants using runAsPlatform(),
- * then executes each inside runWithContext({ tenantId }).
+ * atomically claims them before execution, and handles stuck jobs.
  */
 export async function processQueue() {
   const now = new Date();
-  const items = await runAsPlatform(async () => {
+  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+
+  // 1. Reset items stuck in sending for more than 5 minutes back to queued
+  await runAsPlatform(async () => {
+    await NotificationLog.updateMany(
+      { status: 'sending', lockedAt: { $lt: fiveMinutesAgo } },
+      { $set: { status: 'queued', lockedAt: null } }
+    );
+  });
+
+  // 2. Query candidates ready for processing
+  const candidates = await runAsPlatform(async () => {
     return await NotificationLog.find({
       status: 'queued',
       nextRetryAt: { $lte: now },
     })
-      .select('+payload')
+      .select('_id tenantId')
       .limit(20);
   });
 
-  if (!items || items.length === 0) return 0;
+  if (!candidates || candidates.length === 0) return 0;
 
   let count = 0;
-  for (const item of items) {
+  for (const candidate of candidates) {
+    // 3. Atomically claim queued item (queued -> sending with lockedAt)
+    const claimed = await runAsPlatform(async () => {
+      return await NotificationLog.findOneAndUpdate(
+        { _id: candidate._id, status: 'queued' },
+        { $set: { status: 'sending', lockedAt: new Date() } },
+        { new: true }
+      ).select('+payload');
+    });
+
+    // Skip if already claimed by another concurrent worker
+    if (!claimed) continue;
+
     try {
-      await runWithContext({ tenantId: item.tenantId }, async () => {
-        await processItem(item);
+      await runWithContext({ tenantId: claimed.tenantId }, async () => {
+        await processItem(claimed);
       });
       count++;
     } catch (err) {
-      console.error(`[notifications worker] Error processing item ${item._id}:`, err.message);
+      console.error(`[notifications worker] Error processing item ${claimed._id}:`, err.message);
     }
   }
   return count;
