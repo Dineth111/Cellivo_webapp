@@ -8,7 +8,7 @@ import { encryptPasscode, decryptPasscode, hasPasscodeKey } from '../utils/passc
 import { validateImei } from '../utils/imei.js';
 import { reservePart, releasePart } from '../adapters/stock.adapter.js';
 import { postAdvanceDeposit, postRepairInvoice, postAdvanceCancellation } from '../adapters/ledger.adapter.js';
-import { notify } from '../../notifications/services/notifications.service.js';
+import * as notificationsService from '../../notifications/services/notifications.service.js';
 import { runWithContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound, forbidden, conflict } from '../../../core/errors.js';
 import { escapeRegex } from '../../../core/validate.js';
@@ -225,7 +225,7 @@ export async function createTicket({
   // 7. Post-commit notification (non-blocking)
   if (resolvedCustomer && resolvedCustomer.phone) {
     try {
-      await notify({
+      await notificationsService.notify({
         tenantId,
         branchId,
         channel: 'sms',
@@ -402,7 +402,7 @@ export async function changeStage({
   // 8. Post-commit notification (do not send on reopen)
   if (!isReopen && customerPhone) {
     try {
-      await notify({
+      await notificationsService.notify({
         tenantId,
         branchId: updatedTicket.branchId,
         channel: 'sms',
@@ -650,7 +650,7 @@ export async function checkWarrantyExpiry(tenantId) {
     for (const t of expiring) {
       if (t.customerId?.phone) {
         try {
-          const res = await notify({
+          const res = await notificationsService.notify({
             tenantId,
             branchId: t.branchId,
             channel: 'sms',

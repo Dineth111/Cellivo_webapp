@@ -1,13 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { startDb, stopDb, resetDb } from './helpers.js';
-import { api, signup, addStaff } from './api.js';
+import { api, signup, addStaff, addBranch } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
 import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
 import RepairSequence from '../src/modules/repairs/models/RepairSequence.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import Tenant from '../src/modules/tenants/Tenant.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
+import Branch from '../src/modules/branches/Branch.model.js';
+import User from '../src/modules/users/User.model.js';
+import * as notificationsService from '../src/modules/notifications/services/notifications.service.js';
+import * as ledgerService from '../src/modules/pos/services/ledger.service.js';
+import repairsService from '../src/modules/repairs/services/repairs.service.js';
 import { validateImei } from '../src/modules/repairs/utils/imei.js';
 import { encryptPasscode, decryptPasscode } from '../src/modules/repairs/utils/passcode.js';
 
@@ -559,4 +564,477 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       expect(card.qrPayloadPlaceholder).toContain(`/status/${card.ticketNo}`);
     });
   });
+
+  describe('Resilience, Idempotency, Reopen, and Security Isolation', () => {
+    // 1.a: stage change still succeeds when notify() throws (mock it)
+    it('stage change still succeeds when notify() throws (mock it)', async () => {
+      const shop = await setupShop();
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Sunil Silva', phone: '0771234111' },
+        device: { brand: 'Samsung', model: 'A52' },
+        faultDescription: 'Microphone muffled',
+      });
+      const tid = res.body.data._id;
+
+      const spy = vi.spyOn(notificationsService, 'notify').mockRejectedValueOnce(new Error('SMS Gateway timeout'));
+
+      const moveRes = await api('post', `/api/repairs/${tid}/stage`, shop.token).send({
+        to: 'Diagnosing',
+        note: 'Starting diagnostics despite SMS failure',
+      });
+
+      expect(moveRes.status).toBe(200);
+      expect(moveRes.body.data.stage).toBe('Diagnosing');
+      expect(spy).toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    // 1.b: invoice or advance journal failure rolls back the ticket update too (mock postJournal to throw, then check the ticket and ledger are unchanged)
+    it('invoice journal failure rolls back ticket update and leaves ledger unchanged', async () => {
+      const shop = await setupShop();
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Nimal Bandara', phone: '0771234222' },
+        device: { brand: 'Xiaomi', model: 'Redmi 9' },
+        faultDescription: 'Charging issue',
+      });
+      const tid = res.body.data._id;
+
+      const spy = vi.spyOn(ledgerService, 'postJournal').mockRejectedValueOnce(new Error('Ledger storage error'));
+
+      const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 150_000,
+      });
+
+      expect(invRes.status).toBe(500);
+      spy.mockRestore();
+
+      // Check that ticket was rolled back: isInvoiceSettled is still false
+      const ticketDoc = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(tid).lean();
+      });
+      expect(ticketDoc.isInvoiceSettled).toBe(false);
+      expect(ticketDoc.invoiceId).toBeNull();
+      expect(ticketDoc.history.some((h) => h.note?.includes('Invoice settled'))).toBe(false);
+
+      // Check ledger has 0 entries
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: ticketDoc.ticketNo }).lean();
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    it('advance journal failure rolls back ticket creation and leaves ledger unchanged', async () => {
+      const shop = await setupShop();
+
+      const spy = vi.spyOn(ledgerService, 'postJournal').mockRejectedValueOnce(new Error('Ledger failure'));
+
+      const createRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Anura Kumara', phone: '0771234333' },
+        device: { brand: 'OnePlus', model: 'Nord' },
+        faultDescription: 'Camera blurry',
+        advanceCents: 50_000,
+        advancePaymentMethod: 'cash',
+      });
+
+      expect(createRes.status).toBe(500);
+      spy.mockRestore();
+
+      // Check that no ticket was saved in DB
+      const tickets = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.find({ faultDescription: 'Camera blurry' }).lean();
+      });
+      expect(tickets).toHaveLength(0);
+
+      // Check that no ledger entries were created
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({}).lean();
+      });
+      expect(entries).toHaveLength(0);
+    });
+
+    // 1.c: invoicing the same ticket twice posts one journal only
+    it('invoicing the same ticket twice posts one journal only', async () => {
+      const shop = await setupShop();
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Kasun Wickrama', phone: '0771234444' },
+        device: { brand: 'Vivo', model: 'Y20' },
+        faultDescription: 'Speaker distortion',
+      });
+      const tid = res.body.data._id;
+
+      // First invoice succeeds
+      const inv1 = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 60_000,
+      });
+      expect(inv1.status).toBe(200);
+      expect(inv1.body.data.isInvoiceSettled).toBe(true);
+
+      // Second invoice rejected with 400 ALREADY_INVOICED
+      const inv2 = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 60_000,
+      });
+      expect(inv2.status).toBe(400);
+      expect(inv2.body.code).toBe('ALREADY_INVOICED');
+
+      // Check ledger journal entries: exactly 1 journal entry exists
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: inv1.body.data.ticketNo, isVoided: false }).lean();
+      });
+      expect(entries).toHaveLength(1);
+    });
+
+    // 1.d: reopen from Delivered / Cancelled / Unrepairable: owner only, no notify(), invoice not re-posted, advance not refunded or kept a second time
+    it('reopen from Delivered / Cancelled / Unrepairable: owner only, no notify(), invoice not re-posted, advance not refunded or kept a second time', async () => {
+      const shop = await setupShop();
+      const tech = await addStaff(shop, 'technician', 'tech_reopen@shop.lk');
+
+      // --- Ticket 1: Reopen from Delivered ---
+      const t1Res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer D1', phone: '0771234551' },
+        device: { brand: 'Samsung', model: 'S20' },
+        faultDescription: 'Screen crack',
+      });
+      const t1Id = t1Res.body.data._id;
+      await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+      await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'Quality check' });
+      await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'Ready' });
+      await api('post', `/api/repairs/${t1Id}/invoice`, shop.token).send({ paymentMethod: 'cash', labourCents: 100_000 });
+      await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'Delivered' });
+
+      // Non-owner (technician with repairs.edit) cannot reopen Delivered
+      const techReopen1 = await api('post', `/api/repairs/${t1Id}/stage`, tech.token).send({ to: 'Diagnosing' });
+      expect(techReopen1.status).toBe(403);
+      expect(techReopen1.body.code).toBe('OWNER_ONLY');
+
+      // Owner reopens: no notify() called
+      const notifySpy = vi.spyOn(notificationsService, 'notify');
+      const ownerReopen1 = await api('post', `/api/repairs/${t1Id}/stage`, shop.token).send({ to: 'Diagnosing' });
+      expect(ownerReopen1.status).toBe(200);
+      expect(ownerReopen1.body.data.stage).toBe('Diagnosing');
+      expect(notifySpy).not.toHaveBeenCalled();
+      notifySpy.mockRestore();
+
+      // Invoice cannot be re-posted on reopened ticket
+      const reInvoice = await api('post', `/api/repairs/${t1Id}/invoice`, shop.token).send({ paymentMethod: 'cash', labourCents: 50_000 });
+      expect(reInvoice.status).toBe(400);
+      expect(reInvoice.body.code).toBe('ALREADY_INVOICED');
+
+      // --- Ticket 2: Reopen from Cancelled (with advance) ---
+      const t2Res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer D2', phone: '0771234552' },
+        device: { brand: 'Xiaomi', model: 'Mi 11' },
+        faultDescription: 'Water damage',
+        advanceCents: 80_000,
+        advancePaymentMethod: 'cash',
+      });
+      const t2Id = t2Res.body.data._id;
+      await api('post', `/api/repairs/${t2Id}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Customer changed mind',
+        advanceDecision: 'refund',
+      });
+
+      const entriesAfterCancel = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: t2Res.body.data.ticketNo, isVoided: false }).lean();
+      });
+      expect(entriesAfterCancel).toHaveLength(2);
+
+      // Non-owner cannot reopen
+      const techReopen2 = await api('post', `/api/repairs/${t2Id}/stage`, tech.token).send({ to: 'Diagnosing' });
+      expect(techReopen2.status).toBe(403);
+      expect(techReopen2.body.code).toBe('OWNER_ONLY');
+
+      // Owner reopens
+      const ownerReopen2 = await api('post', `/api/repairs/${t2Id}/stage`, shop.token).send({ to: 'Diagnosing' });
+      expect(ownerReopen2.status).toBe(200);
+
+      // Move to Cancelled again: advance is already settled, so does NOT refund or keep second time
+      await api('post', `/api/repairs/${t2Id}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Cancelled again after reopen',
+      });
+      const entriesAfterSecondCancel = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: t2Res.body.data.ticketNo, isVoided: false }).lean();
+      });
+      expect(entriesAfterSecondCancel).toHaveLength(entriesAfterCancel.length);
+
+      // --- Ticket 3: Reopen from Unrepairable ---
+      const t3Res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer D3', phone: '0771234553' },
+        device: { brand: 'Oppo', model: 'Reno 5' },
+        faultDescription: 'Dead motherboard',
+        advanceCents: 60_000,
+        advancePaymentMethod: 'cash',
+      });
+      const t3Id = t3Res.body.data._id;
+      await api('post', `/api/repairs/${t3Id}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${t3Id}/stage`, shop.token).send({
+        to: 'Unrepairable',
+        note: 'Board unrepairable',
+        advanceDecision: 'keep_fee',
+        feeCents: 20_000,
+      });
+
+      const entriesAfterUnrep = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: t3Res.body.data.ticketNo, isVoided: false }).lean();
+      });
+      expect(entriesAfterUnrep).toHaveLength(2);
+
+      // Non-owner cannot reopen
+      const techReopen3 = await api('post', `/api/repairs/${t3Id}/stage`, tech.token).send({ to: 'Diagnosing' });
+      expect(techReopen3.status).toBe(403);
+      expect(techReopen3.body.code).toBe('OWNER_ONLY');
+
+      // Owner reopens
+      const ownerReopen3 = await api('post', `/api/repairs/${t3Id}/stage`, shop.token).send({ to: 'Diagnosing' });
+      expect(ownerReopen3.status).toBe(200);
+
+      // Advance not refunded or kept second time
+      const entriesAfterReopenUnrep = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: t3Res.body.data.ticketNo, isVoided: false }).lean();
+      });
+      expect(entriesAfterReopenUnrep).toHaveLength(entriesAfterUnrep.length);
+    });
+
+    // 1.e: cancel from In repair, Quality check and Ready needs repairs.approve or owner, a note, and advanceDecision when advance > 0
+    it('cancel from In repair, Quality check and Ready needs repairs.approve or owner, a note, and advanceDecision when advance > 0', async () => {
+      const shop = await setupShop();
+      const tech = await addStaff(shop, 'technician', 'tech_cancel@shop.lk');
+
+      async function setupTicketAtStage(targetStage) {
+        const createRes = await api('post', '/api/repairs', shop.token).send({
+          customer: { name: 'Customer E', phone: '0771234661' },
+          device: { brand: 'Apple', model: 'iPhone 11' },
+          faultDescription: 'Speaker repair',
+          advanceCents: 50_000,
+          advancePaymentMethod: 'cash',
+        });
+        const tid = createRes.body.data._id;
+        await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+        await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+        if (targetStage === 'Quality check' || targetStage === 'Ready') {
+          await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Quality check' });
+        }
+        if (targetStage === 'Ready') {
+          await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Ready' });
+        }
+        return tid;
+      }
+
+      for (const stg of ['In repair', 'Quality check', 'Ready']) {
+        // Test 1: Non-approver technician (has edit but not approve) blocked with 403 APPROVAL_REQUIRED
+        const tid1 = await setupTicketAtStage(stg);
+        const nonApproveRes = await api('post', `/api/repairs/${tid1}/stage`, tech.token).send({
+          to: 'Cancelled',
+          note: 'Customer wants to cancel',
+          advanceDecision: 'refund',
+        });
+        expect(nonApproveRes.status).toBe(403);
+        expect(nonApproveRes.body.code).toBe('APPROVAL_REQUIRED');
+
+        // Test 2: Missing note blocked with 400
+        const tid2 = await setupTicketAtStage(stg);
+        const noNoteRes = await api('post', `/api/repairs/${tid2}/stage`, shop.token).send({
+          to: 'Cancelled',
+          note: '',
+          advanceDecision: 'refund',
+        });
+        expect(noNoteRes.status).toBe(400);
+        expect(noNoteRes.body.code).toBe('NOTE_REQUIRED');
+
+        // Test 3: Missing advanceDecision when advance > 0 blocked with 400
+        const tid3 = await setupTicketAtStage(stg);
+        const noAdvDecisionRes = await api('post', `/api/repairs/${tid3}/stage`, shop.token).send({
+          to: 'Cancelled',
+          note: 'Valid cancellation note',
+        });
+        expect(noAdvDecisionRes.status).toBe(400);
+        expect(noAdvDecisionRes.body.code).toBe('ADVANCE_DECISION_REQUIRED');
+
+        // Test 4: Authorized owner with note and advanceDecision succeeds
+        const tid4 = await setupTicketAtStage(stg);
+        const okRes = await api('post', `/api/repairs/${tid4}/stage`, shop.token).send({
+          to: 'Cancelled',
+          note: 'Valid cancellation note by owner',
+          advanceDecision: 'refund',
+        });
+        expect(okRes.status).toBe(200);
+        expect(okRes.body.data.stage).toBe('Cancelled');
+      }
+    });
+
+    // 1.f: cross-tenant ticket id returns 404 over HTTP for GET, PUT, stage, assign, parts, invoice
+    it('cross-tenant ticket id returns 404 over HTTP for GET, PUT, stage, assign, parts, invoice', async () => {
+      const shopA = await setupShop('shopA@cellivo.lk', 'Shop A');
+      const shopB = await setupShop('shopB@cellivo.lk', 'Shop B');
+
+      // Create ticket in Shop A
+      const created = await api('post', '/api/repairs', shopA.token).send({
+        customer: { name: 'Customer A', phone: '0771111111' },
+        device: { brand: 'Apple', model: 'iPhone 12' },
+        faultDescription: 'Screen issue',
+      });
+      const ticketIdA = created.body.data._id;
+
+      // 1. GET /api/repairs/:id
+      const getRes = await api('get', `/api/repairs/${ticketIdA}`, shopB.token);
+      expect(getRes.status).toBe(404);
+
+      // 2. PUT /api/repairs/:id
+      const putRes = await api('put', `/api/repairs/${ticketIdA}`, shopB.token).send({
+        conditionNotes: 'Cross tenant tampering',
+      });
+      expect(putRes.status).toBe(404);
+
+      // 3. POST /api/repairs/:id/stage
+      const stageRes = await api('post', `/api/repairs/${ticketIdA}/stage`, shopB.token).send({
+        to: 'Diagnosing',
+      });
+      expect(stageRes.status).toBe(404);
+
+      // 4. POST /api/repairs/:id/assign
+      const assignRes = await api('post', `/api/repairs/${ticketIdA}/assign`, shopB.token).send({
+        technicianId: shopB.tenantId,
+      });
+      expect(assignRes.status).toBe(404);
+
+      // 5. POST /api/repairs/:id/parts
+      const partsRes = await api('post', `/api/repairs/${ticketIdA}/parts`, shopB.token).send({
+        name: 'Screen Part',
+        qty: 1,
+        unitPriceCents: 150_000,
+      });
+      expect(partsRes.status).toBe(404);
+
+      // 6. POST /api/repairs/:id/invoice
+      const invRes = await api('post', `/api/repairs/${ticketIdA}/invoice`, shopB.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invRes.status).toBe(404);
+    });
+
+    // 1.g: assign: technician must belong to same tenant and branch; workload endpoint counts
+    it('assign: technician must belong to same tenant and branch; workload endpoint counts', async () => {
+      const shopA = await setupShop('shopTechA@cellivo.lk', 'Shop A');
+      const shopB = await setupShop('shopTechB@cellivo.lk', 'Shop B');
+
+      // Create a second branch in shopA
+      const branchA2 = await addBranch(shopA.tenantId, { name: 'Shop A Branch 2', invoicePrefix: 'B2' });
+
+      // Staff users:
+      // techA1: assigned to mainBranch
+      const techA1 = await addStaff(shopA, 'technician', 'techA1@shop.lk');
+      // techA2: assigned only to branchA2
+      const techA2 = await addStaff(shopA, 'technician', 'techA2@shop.lk');
+      await runAsPlatform(async () => {
+        await User.findByIdAndUpdate(techA2.user._id, { branchIds: [branchA2._id] });
+      });
+      // techB: belongs to shopB
+      const techB = await addStaff(shopB, 'technician', 'techB@shop.lk');
+
+      // Create ticket on shopA mainBranch
+      const res = await api('post', '/api/repairs', shopA.token).send({
+        customer: { name: 'Customer Tech', phone: '0771234771' },
+        device: { brand: 'Samsung', model: 'Galaxy S21' },
+        faultDescription: 'No power',
+      });
+      const tid = res.body.data._id;
+
+      // 1. Assign techB (cross tenant) -> 400 INVALID_TECHNICIAN
+      const crossTenantAssign = await api('post', `/api/repairs/${tid}/assign`, shopA.token).send({
+        technicianId: techB.user._id,
+      });
+      expect(crossTenantAssign.status).toBe(400);
+      expect(crossTenantAssign.body.code).toBe('INVALID_TECHNICIAN');
+
+      // 2. Assign techA2 (same tenant, different branch) -> 400 INVALID_TECHNICIAN
+      const diffBranchAssign = await api('post', `/api/repairs/${tid}/assign`, shopA.token).send({
+        technicianId: techA2.user._id,
+      });
+      expect(diffBranchAssign.status).toBe(400);
+      expect(diffBranchAssign.body.code).toBe('INVALID_TECHNICIAN');
+
+      // 3. Assign techA1 (same tenant and branch) -> 200 OK
+      const sameBranchAssign = await api('post', `/api/repairs/${tid}/assign`, shopA.token).send({
+        technicianId: techA1.user._id,
+      });
+      expect(sameBranchAssign.status).toBe(200);
+      expect(sameBranchAssign.body.data.technicianId).toBe(String(techA1.user._id));
+
+      // 4. Workload endpoint counts active tickets
+      const workloadRes = await api('get', `/api/repairs/technicians/workload?branchId=${shopA.branchId}`, shopA.token);
+      expect(workloadRes.status).toBe(200);
+      const tech1Workload = workloadRes.body.data.find((w) => String(w._id) === String(techA1.user._id));
+      expect(tech1Workload).toBeDefined();
+      expect(tech1Workload.activeTicketsCount).toBe(1);
+    });
+
+    // 1.h: checkWarrantyExpiry(tenantId) finds only tickets expiring within the window
+    it('checkWarrantyExpiry(tenantId) finds only tickets expiring within the window', async () => {
+      const shop = await setupShop();
+
+      const baseDate = new Date();
+
+      // 1. Ticket expiring in 12 hours (within 24h window)
+      const tExpiring = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Expiring', phone: '0771234881' },
+        device: { brand: 'Google', model: 'Pixel 5' },
+        faultDescription: 'Battery replacement',
+      });
+      const tExpiringId = tExpiring.body.data._id;
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        await RepairTicket.findByIdAndUpdate(tExpiringId, {
+          warrantyDays: 30,
+          warrantyExpiresAt: new Date(baseDate.getTime() + 12 * 60 * 60 * 1000),
+        });
+      });
+
+      // 2. Ticket expiring in 48 hours (outside 24h window)
+      const tFuture = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Future', phone: '0771234882' },
+        device: { brand: 'Google', model: 'Pixel 6' },
+        faultDescription: 'Screen replacement',
+      });
+      const tFutureId = tFuture.body.data._id;
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        await RepairTicket.findByIdAndUpdate(tFutureId, {
+          warrantyDays: 30,
+          warrantyExpiresAt: new Date(baseDate.getTime() + 48 * 60 * 60 * 1000),
+        });
+      });
+
+      // 3. Ticket already expired yesterday (in the past)
+      const tPast = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Past', phone: '0771234883' },
+        device: { brand: 'Google', model: 'Pixel 4' },
+        faultDescription: 'Port replacement',
+      });
+      const tPastId = tPast.body.data._id;
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        await RepairTicket.findByIdAndUpdate(tPastId, {
+          warrantyDays: 30,
+          warrantyExpiresAt: new Date(baseDate.getTime() - 24 * 60 * 60 * 1000),
+        });
+      });
+
+      // 4. Ticket with no warranty
+      await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer No Warranty', phone: '0771234884' },
+        device: { brand: 'Google', model: 'Pixel 3' },
+        faultDescription: 'Inspection only',
+      });
+
+      // Call checkWarrantyExpiry
+      const results = await repairsService.checkWarrantyExpiry(shop.tenantId);
+      expect(results).toHaveLength(1);
+      expect(results[0].ticketNo).toBe(tExpiring.body.data.ticketNo);
+      expect(results[0].sent).toBe(true);
+    });
+  });
 });
+

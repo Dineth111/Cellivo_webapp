@@ -1,5 +1,5 @@
 // TEMP: needs Dev 3 approval
-import { postJournal, accountForMethod } from '../../pos/services/ledger.service.js';
+import * as ledgerService from '../../pos/services/ledger.service.js';
 import { round, subtract, add } from '../../pos/money.js';
 import { badRequest } from '../../../core/errors.js';
 
@@ -20,13 +20,13 @@ export async function postAdvanceDeposit({
   const amt = round(amountCents);
   if (amt <= 0) return null;
 
-  const methodAcc = accountForMethod(paymentMethod);
+  const methodAcc = ledgerService.accountForMethod(paymentMethod);
   const lines = [
     { accountCode: methodAcc, debit: amt, credit: 0, description: `Advance deposit via ${paymentMethod} for repair ${ticketNo}` },
     { accountCode: '2020', debit: 0, credit: amt, description: `Customer deposit liability for repair ${ticketNo}` },
   ];
 
-  return await postJournal({
+  return await ledgerService.postJournal({
     tenantId,
     branchId,
     referenceType: 'manual',
@@ -73,7 +73,7 @@ export async function postRepairInvoice({
     throw badRequest('Repair total must be greater than 0 to generate invoice');
   }
 
-  const methodAcc = accountForMethod(paymentMethod);
+  const methodAcc = ledgerService.accountForMethod(paymentMethod);
   const lines = [];
 
   if (advance === 0) {
@@ -106,7 +106,7 @@ export async function postRepairInvoice({
     );
   }
 
-  return await postJournal({
+  return await ledgerService.postJournal({
     tenantId,
     branchId,
     referenceType: 'manual',
@@ -144,7 +144,7 @@ export async function postAdvanceCancellation({
   const advance = round(advanceCents);
   if (advance <= 0) return null;
 
-  const methodAcc = accountForMethod(paymentMethod);
+  const methodAcc = ledgerService.accountForMethod(paymentMethod);
   const fee = round(feeCents || 0);
 
   if (fee > advance) {
@@ -177,7 +177,7 @@ export async function postAdvanceCancellation({
     throw badRequest(`Unknown advance decision: ${decision}`);
   }
 
-  return await postJournal({
+  return await ledgerService.postJournal({
     tenantId,
     branchId,
     referenceType: 'manual',
