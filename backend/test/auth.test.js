@@ -8,6 +8,7 @@ import Tenant from '../src/modules/tenants/Tenant.model.js';
 import { runAsPlatform } from '../src/core/tenantContext.js';
 import * as authSvc from '../src/modules/auth/auth.service.js';
 import { assertConfig } from '../src/core/config.js';
+import { setEmailProvider, resetProviders } from '../src/modules/notifications/providers/provider.interface.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -166,6 +167,31 @@ describe('passwords', () => {
     await addStaff(owner, 'cashier', 'c@shop.lk');
     const t = await authSvc.forgotPassword('c@shop.lk');
     await api('post', '/api/auth/set-password').send({ token: t, password: 'ResetPassw0rd' }).expect(400);
+  });
+
+  it('forgot-password gives the same HTTP response for a registered and an unknown email when the email provider throws', async () => {
+    await signup('o@shop.lk');
+
+    setEmailProvider({
+      async send() {
+        throw new Error('Email provider connection error');
+      },
+    });
+
+    try {
+      const unknown = await api('post', '/api/auth/forgot-password').send({ email: 'ghost@shop.lk' });
+      const known = await api('post', '/api/auth/forgot-password').send({ email: 'o@shop.lk' });
+
+      expect(unknown.status).toBe(200);
+      expect(known.status).toBe(200);
+      expect(known.body).toEqual(unknown.body);
+      expect(known.body).toEqual({
+        success: true,
+        message: 'If an account exists for this email, a reset link has been sent.',
+      });
+    } finally {
+      resetProviders();
+    }
   });
 });
 

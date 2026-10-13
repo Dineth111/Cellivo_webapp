@@ -39,45 +39,54 @@ Each item states the safe default that was implemented. Confirm or change.
 27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
 28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
 
+## Notifications review (Dev 5)
+
+29. **Pre-tenant emails.** Sign-up verification codes (`signup.service.js`) go directly to the email provider without writing a `NotificationLog` document, because every tenant model requires a `tenantId`. Confirm whether platform-level notification logs should be introduced in a separate collection.
+30. **Permissions for notifications.** `'notifications'` is not in `core/permissions.js` `MODULES`. Notification templates and delivery logs are currently guarded by `settings.view` and `settings.edit`. Confirm if Dev 1 should add `notifications` as a distinct module in `MODULES`.
+31. **Lockout notice to owner.** FRS F-03 lockout alert (line 45 in `auth.service.js`) remains unwired for Phase 1.
+32. **Platform events.** `new_lead`, `demo_booking`, and `system_threshold_breach` templates are provided in defaults, but triggers are not wired yet.
+33. **Serverless queue worker trigger.** `backend/api/index.js` suggests a serverless deployment where `server.js` intervals do not run; the notification queue needs a scheduled trigger if so.
+34. **In-app broadcast read state.** In-app notifications with `userId: null` share one read state across all users.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
 
 ## Customers review (Dev 5)
 
-29. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
-30. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
-31. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
+35. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
+36. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
+37. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
    - Does NOT change `customerSnapshot` on `Invoice` documents, preserving historical customer details at time of sale.
    - Does NOT touch `LedgerEntry` records (Dev 3's financial ledger remains an immutable double-entry log).
    - Skips `HeldCart` (in-progress transient carts are discarded or left to expire).
    - Self-merges, merges into archived/merged customers, circular merges, and cross-tenant merges are rejected with 400 or 404.
-32. **Customer history scope.**
+38. **Customer history scope.**
    `GET /api/customers/:id/history` returns invoices, payments, returns / credit notes, installment plans and loyalty transactions.
    Repairs (my Phase 3) and devices owned (Dev 4 inventory) return empty arrays until those modules exist.
    Cost prices on invoice lines are masked through `maskCostMargins` unless the caller has the `view_cost_margin` special permission.
 
 ### For Dev 3
 
-33. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
+39. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
    During a customer merge it writes `customerId` on Invoice, CreditNote, InstallmentPlan, LoyaltyTransaction, Quotation and Cheque inside the merge transaction session.
    It does NOT touch `customerSnapshot` or `LedgerEntry`.
    Dev 3 should either approve this adapter or take ownership of the function.
 
-34. **`completeSale` transient-error retry.**
+40. **`completeSale` transient-error retry.**
    In `pos/services/sale.service.js`, the retry guard checks `err.errorLabels?.has?.('TransientTransactionError')` or `code === 112`.
    The `.has?.()` call may never match because `errorLabels` is sometimes an array, not a Set.
    I did not change it in the customers branch — please verify and fix if needed.
 
 ### For Dev 1
 
-35. **`LoyaltySettings` unique-tenantId index.**
+41. **`LoyaltySettings` unique-tenantId index.**
    `LoyaltySettings` makes `tenantId` unique with `schema.path('tenantId')._index = { unique: true }` (private Mongoose field).
    This is necessary because `tenantPlugin` already registers a non-unique `tenantId_1` index via `index: true` on the path, and calling `schema.index({ tenantId: 1 }, { unique: true })` would create a second index definition under the same auto-generated name, causing a MongoDB `createIndex` error at startup.
    Suggest `tenantPlugin` accepts a `{ unique: true }` option so one-per-tenant models do not need the private API.
    An isolation test (`isolation.test.js`, "LoyaltySettings schema constraints") guards the index — it asserts exactly one `{ tenantId: 1 }` index exists, it is unique, and a duplicate insert is rejected with `code 11000`.
 
-36. **Existing phone data and E.164 migration.**
+42. **Existing phone data and E.164 migration.**
    All new writes store phones in E.164 format (`+94771234567`).
    Reads (duplicate check, search, CSV import) use `phoneVariants()` to match legacy formats still in the database (e.g. `0771234567`, `94771234567`).
    `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.

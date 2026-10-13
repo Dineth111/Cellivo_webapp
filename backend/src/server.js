@@ -3,6 +3,7 @@ import connectDB from './core/db.js';
 import { createApp } from './app.js';
 import { runBillingCycle } from './modules/billing/billing.service.js';
 import { cleanAllExpiredHeldCarts } from './modules/pos/services/sale.service.js';
+import { startNotificationWorker } from './modules/notifications/services/notifications.worker.js';
 
 // Fail closed: never start with missing secrets.
 try {
@@ -27,6 +28,7 @@ if (config.billingJobMinutes > 0) {
 // Expired POS held carts release their IMEI reservations (FRS F-09).
 if (config.env !== 'test') {
   setInterval(() => cleanAllExpiredHeldCarts().catch((e) => console.error('[held carts job]', e)), 15 * 60_000).unref();
+  startNotificationWorker();
 }
 
 createApp().listen(config.port, () => {
