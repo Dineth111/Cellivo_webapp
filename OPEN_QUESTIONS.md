@@ -52,5 +52,33 @@ Each item states the safe default that was implemented. Confirm or change.
    - Does NOT touch `LedgerEntry` records (Dev 3's financial ledger remains an immutable double-entry log).
    - Skips `HeldCart` (in-progress transient carts are discarded or left to expire).
    - Self-merges, merges into archived/merged customers, circular merges, and cross-tenant merges are rejected with 400 or 404.
-32. **Customer history scope.** `GET /api/customers/:id/history` aggregates invoices, payments, credit notes, installment plans, and loyalty transactions. Repairs and devices owned are currently returned as empty arrays until Dev 4 repair and inventory modules are introduced.
+32. **Customer history scope.**
+   `GET /api/customers/:id/history` returns invoices, payments, returns / credit notes, installment plans and loyalty transactions.
+   Repairs (my Phase 3) and devices owned (Dev 4 inventory) return empty arrays until those modules exist.
+   Cost prices on invoice lines are masked through `maskCostMargins` unless the caller has the `view_cost_margin` special permission.
 
+### For Dev 3
+
+33. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
+   During a customer merge it writes `customerId` on Invoice, CreditNote, InstallmentPlan, LoyaltyTransaction, Quotation and Cheque inside the merge transaction session.
+   It does NOT touch `customerSnapshot` or `LedgerEntry`.
+   Dev 3 should either approve this adapter or take ownership of the function.
+
+34. **`completeSale` transient-error retry.**
+   In `pos/services/sale.service.js`, the retry guard checks `err.errorLabels?.has?.('TransientTransactionError')` or `code === 112`.
+   The `.has?.()` call may never match because `errorLabels` is sometimes an array, not a Set.
+   I did not change it in the customers branch — please verify and fix if needed.
+
+### For Dev 1
+
+35. **`LoyaltySettings` unique-tenantId index.**
+   `LoyaltySettings` makes `tenantId` unique with `schema.path('tenantId')._index = { unique: true }` (private Mongoose field).
+   This is necessary because `tenantPlugin` already registers a non-unique `tenantId_1` index via `index: true` on the path, and calling `schema.index({ tenantId: 1 }, { unique: true })` would create a second index definition under the same auto-generated name, causing a MongoDB `createIndex` error at startup.
+   Suggest `tenantPlugin` accepts a `{ unique: true }` option so one-per-tenant models do not need the private API.
+   An isolation test (`isolation.test.js`, "LoyaltySettings schema constraints") guards the index — it asserts exactly one `{ tenantId: 1 }` index exists, it is unique, and a duplicate insert is rejected with `code 11000`.
+
+36. **Existing phone data and E.164 migration.**
+   All new writes store phones in E.164 format (`+94771234567`).
+   Reads (duplicate check, search, CSV import) use `phoneVariants()` to match legacy formats still in the database (e.g. `0771234567`, `94771234567`).
+   `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.
+   After that run, `phoneVariants` is still used defensively but should no longer find mismatches.
