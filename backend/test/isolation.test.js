@@ -27,6 +27,8 @@ import LoyaltySettings from '../src/modules/customers/LoyaltySettings.model.js';
 import NotificationTemplate from '../src/modules/notifications/models/NotificationTemplate.model.js';
 import NotificationLog from '../src/modules/notifications/models/NotificationLog.model.js';
 import InAppNotification from '../src/modules/notifications/models/InAppNotification.model.js';
+import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
+import RepairSequence from '../src/modules/repairs/models/RepairSequence.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -59,6 +61,8 @@ const MODELS = {
   NotificationTemplate,
   NotificationLog,
   InAppNotification,
+  RepairTicket,
+  RepairSequence,
 };
 
 async function twoShops() {

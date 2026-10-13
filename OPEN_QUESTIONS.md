@@ -91,3 +91,27 @@ Each item states the safe default that was implemented. Confirm or change.
    Reads (duplicate check, search, CSV import) use `phoneVariants()` to match legacy formats still in the database (e.g. `0771234567`, `94771234567`).
    `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.
    After that run, `phoneVariants` is still used defensively but should no longer find mismatches.
+
+## Repairs review (Dev 5)
+
+43. **Repair deposits temporary ledger account.**
+   Repair advance deposits temporarily use account `2020` (Store credit liability) and therefore appear in the store-credit liability balance until invoiced or refunded.
+
+44. **Repair cash & drawer sessions.**
+   Repair cash payments (intake advance, invoice settlement, cancellation fee/refund) are not currently tied to an active POS cash drawer session. Dev 3 should advise whether repair cash movements should create `CashSession` movements.
+
+### For Dev 3
+
+45. **Ledger accounts and referenceType request.**
+   Please add: (1) `'repair'` enum value to `LedgerEntry.referenceType`, (2) dedicated `4040 Repair income` revenue account, and (3) `2040 Customer deposits` liability account in `DEFAULT_ACCOUNTS`. Until then, repairs use `referenceType: 'manual'` and `4020 Other income`.
+
+46. **Inventory and COGS exclusion (with Dev 4).**
+   Repair invoices do NOT post COGS (`5010`) or Inventory reduction (`1050`) because the TEMP stock adapter records parts on tickets without modifying inventory. Doing so would double-count once Dev 4 stock integration lands. `partsCostCents` is stored on the ticket for store profit calculation (visible only with `view_cost_margin`).
+
+### For Dev 1
+
+47. **Device photo storage.**
+   FRS F-12 specifies device intake photos (max 6). No file storage backend exists currently, so `photoUrls` stores URLs only.
+
+48. **Passcode encryption key.**
+   Device passcodes are encrypted with AES-256-GCM using `REPAIR_PASSCODE_KEY`. If the key is unset, passcode storage is disabled with an API warning. Documented in `.env.example`.
