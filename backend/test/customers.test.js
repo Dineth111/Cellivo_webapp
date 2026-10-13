@@ -327,6 +327,53 @@ describe('CSV Import (F-13)', () => {
     const list = await api('get', '/api/customers', shop.token);
     expect(list.body.total).toBe(0); // 1 archived, 0 active
   });
+
+  it('rejects CSV row when DB stores legacy format (0771234567) and CSV sends E.164 (+94771234567) — fix for phone-variant lookup bug', async () => {
+    const shop = await setupShop();
+
+    // Bypass normalisation to plant a legacy-format phone directly in the DB,
+    // simulating a customer created before the E.164 migration.
+    await runWithContext({ tenantId: shop.tenantId }, async () => {
+      await Customer.collection.insertOne({
+        tenantId: new mongoose.Types.ObjectId(shop.tenantId),
+        name: 'Legacy Phone Customer',
+        phone: '0771234567', // raw local format — NOT E.164
+        email: '',
+        address: '',
+        nic: '',
+        type: 'retail',
+        creditLimitCents: 0,
+        currentBalanceCents: 0,
+        loyaltyPoints: 0,
+        notes: '',
+        tags: [],
+        marketingOptIn: false,
+        isArchived: false,
+        mergedInto: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+
+    // CSV row uses the E.164 equivalent — must be caught as a duplicate
+    const csvData = [
+      'name,phone,email',
+      'New Customer,+94771234567,new@test.com',
+    ].join('\n');
+
+    const res = await api('post', '/api/customers/import', shop.token)
+      .set('Content-Type', 'text/csv')
+      .send(csvData);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DUPLICATE_PHONE_IN_CSV');
+    expect(res.body.data?.errors[0].row).toBe(2);
+    expect(res.body.data?.errors[0].field).toBe('phone');
+
+    // The pre-seeded legacy document is still there; no new import row was added.
+    const list = await api('get', '/api/customers', shop.token);
+    expect(list.body.total).toBe(1); // legacy doc present, CSV row rejected
+  });
 });
 
 describe('Customer Merge (F-13)', () => {

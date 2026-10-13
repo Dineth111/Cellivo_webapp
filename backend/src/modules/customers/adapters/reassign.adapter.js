@@ -23,42 +23,42 @@ import Cheque from '../../pos/models/Cheque.model.js';
 export async function reassignCustomerData(tenantId, fromId, toId, session) {
   // 1. Invoices (preserve customerSnapshot for historical fidelity)
   const inv = await Invoice.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );
 
   // 2. Credit notes / returns
   const cn = await CreditNote.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );
 
   // 3. Installment plans
   const ip = await InstallmentPlan.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );
 
   // 4. Loyalty transactions
   const lt = await LoyaltyTransaction.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );
 
   // 5. Quotations
   const quot = await Quotation.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );
 
   // 6. Cheques
   const chq = await Cheque.updateMany(
-    { customerId: fromId },
+    { tenantId, customerId: fromId },
     { $set: { customerId: toId } },
     { session }
   );

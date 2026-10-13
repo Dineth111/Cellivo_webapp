@@ -12,6 +12,10 @@ const loyaltySettingsSchema = new mongoose.Schema(
 );
 
 loyaltySettingsSchema.plugin(tenantPlugin);
+// tenantPlugin adds tenantId with `index: true` (non-unique). Override the path-level
+// index descriptor in-place to make it unique for this one-per-tenant model.
+// Using ._index rather than schema.index() avoids registering a second index definition
+// under the same auto-generated name "tenantId_1", which would cause a MongoDB error.
 loyaltySettingsSchema.path('tenantId')._index = { unique: true };
 
 export default mongoose.models.LoyaltySettings || mongoose.model('LoyaltySettings', loyaltySettingsSchema);

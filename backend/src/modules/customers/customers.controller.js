@@ -474,7 +474,10 @@ export const importCustomers = async (req, res) => {
     const seenRowErrors = new Set();
 
     for (const doc of existingDocs) {
-      const matchingRows = phoneToRowsMap.get(doc.phone) || [];
+      // Normalise the stored phone so legacy formats (e.g. "0771234567") match
+      // the E.164-keyed phoneToRowsMap ("+94771234567").
+      const docNormalized = normalizePhone(doc.phone) || doc.phone;
+      const matchingRows = phoneToRowsMap.get(docNormalized) || [];
       for (const row of matchingRows) {
         const errorKey = `${row.rowNumber}:${row.customerData.phone}`;
         if (!seenRowErrors.has(errorKey)) {
