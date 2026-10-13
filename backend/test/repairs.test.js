@@ -28,6 +28,13 @@ async function setupShop(email = 'owner@cellivo.lk', shopName = 'Cellivo Repairs
   return { ...shop, tenantId, branchId };
 }
 
+async function advanceToReady(ticketId, token) {
+  await api('post', `/api/repairs/${ticketId}/stage`, token).send({ to: 'Diagnosing' });
+  await api('post', `/api/repairs/${ticketId}/stage`, token).send({ to: 'In repair', waiveApproval: true });
+  await api('post', `/api/repairs/${ticketId}/stage`, token).send({ to: 'Quality check' });
+  await api('post', `/api/repairs/${ticketId}/stage`, token).send({ to: 'Ready' });
+}
+
 describe('Repairs Module (F-12 Phase 3)', () => {
   describe('Luhn IMEI Validation', () => {
     it('validates 15-digit IMEI with Luhn checksum; rejects invalid and accepts null', () => {
@@ -284,6 +291,8 @@ describe('Repairs Module (F-12 Phase 3)', () => {
         unitCostCents: 150_000,
       });
 
+      await advanceToReady(tid, shop.token);
+
       // Settle invoice with Rs 1,500 labour (150,000 cents). Total = 250k + 150k = 400k (Rs 4,000). Due = 300k (Rs 3,000).
       const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
         paymentMethod: 'cash',
@@ -335,6 +344,7 @@ describe('Repairs Module (F-12 Phase 3)', () => {
         advancePaymentMethod: 'cash',
       });
       const tid = res.body.data._id;
+      await advanceToReady(tid, shop.token);
 
       // Invoice with exactly Rs 2,000 labour (200,000 cents)
       const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
@@ -368,6 +378,7 @@ describe('Repairs Module (F-12 Phase 3)', () => {
         advancePaymentMethod: 'cash',
       });
       const tid = res.body.data._id;
+      await advanceToReady(tid, shop.token);
 
       // Final job total Rs 1,000 (100,000 cents). Excess Rs 2,000 (200,000 cents) refunded.
       const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
@@ -598,6 +609,7 @@ describe('Repairs Module (F-12 Phase 3)', () => {
         faultDescription: 'Charging issue',
       });
       const tid = res.body.data._id;
+      await advanceToReady(tid, shop.token);
 
       const spy = vi.spyOn(ledgerService, 'postJournal').mockRejectedValueOnce(new Error('Ledger storage error'));
 
@@ -662,6 +674,7 @@ describe('Repairs Module (F-12 Phase 3)', () => {
         faultDescription: 'Speaker distortion',
       });
       const tid = res.body.data._id;
+      await advanceToReady(tid, shop.token);
 
       // First invoice succeeds
       const inv1 = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
@@ -1036,5 +1049,407 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       expect(results[0].sent).toBe(true);
     });
   });
+
+  describe('Review Fixes (Ledger, Stage, Warranty, and Invoicing)', () => {
+    // Item 1: settleInvoice: held advance = ticket.advanceSettled ? 0 : ticket.advanceCents
+    it('Item 1: cancel with refund -> reopen -> move to Ready -> invoice; journal has no 2020 debit for old advance and is balanced; 2020 nets to zero', async () => {
+      const shop = await setupShop();
+
+      // Intake with advance Rs 1,000 (100,000 cents) cash
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Reopen Invoicing Customer', phone: '0779990001' },
+        device: { brand: 'Samsung', model: 'A52' },
+        faultDescription: 'Screen issue',
+        advanceCents: 100_000,
+        advancePaymentMethod: 'cash',
+      });
+      const tid = res.body.data._id;
+      const tNo = res.body.data.ticketNo;
+
+      // Cancel with refund
+      const cancelRes = await api('post', `/api/repairs/${tid}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Customer changed mind',
+        advanceDecision: 'refund',
+      });
+      expect(cancelRes.status).toBe(200);
+      expect(cancelRes.body.data.advanceSettled).toBe(true);
+
+      // Reopen to Diagnosing by owner
+      const reopenRes = await api('post', `/api/repairs/${tid}/stage`, shop.token).send({
+        to: 'Diagnosing',
+        note: 'Customer returned to proceed',
+      });
+      expect(reopenRes.status).toBe(200);
+      expect(reopenRes.body.data.stage).toBe('Diagnosing');
+
+      // Move to Ready
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Quality check' });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Ready' });
+
+      // Invoice for Rs 1,500 labour (150,000 cents) cash
+      const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 150_000,
+      });
+      expect(invRes.status).toBe(200);
+      expect(invRes.body.data.isInvoiceSettled).toBe(true);
+
+      // Check all ledger entries for this ticket
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: tNo, isVoided: false }).lean();
+      });
+      // 1. Advance intake, 2. Cancel refund, 3. Final invoice
+      expect(entries).toHaveLength(3);
+
+      const invEntry = entries.find((e) => e.description.includes('invoice'));
+      expect(invEntry).toBeDefined();
+
+      // Assert the invoice journal has NO 2020 debit for the old advance
+      const inv2020Debit = invEntry.lines.find((l) => l.accountCode === '2020');
+      expect(inv2020Debit).toBeUndefined();
+
+      // Assert invoice entry is balanced: Dr 1010 (150k), Cr 4020 (150k)
+      const debit1010 = invEntry.lines.find((l) => l.accountCode === '1010');
+      const credit4020 = invEntry.lines.find((l) => l.accountCode === '4020');
+      expect(debit1010.debit).toBe(150_000);
+      expect(credit4020.credit).toBe(150_000);
+
+      // Assert account 2020 nets to zero across all entries for this ticket
+      let total2020Debit = 0;
+      let total2020Credit = 0;
+      for (const entry of entries) {
+        for (const line of entry.lines) {
+          if (line.accountCode === '2020') {
+            total2020Debit += line.debit || 0;
+            total2020Credit += line.credit || 0;
+          }
+        }
+      }
+      expect(total2020Debit).toBe(100_000);
+      expect(total2020Credit).toBe(100_000);
+      expect(total2020Debit - total2020Credit).toBe(0); // 2020 nets to zero!
+    });
+
+    // Item 2: settleInvoice only when stage === 'Ready' (400 INVOICE_STAGE_INVALID otherwise)
+    it('Item 2: settleInvoice only when stage === Ready (400 INVOICE_STAGE_INVALID otherwise)', async () => {
+      const shop = await setupShop();
+
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Stage Invoicing Customer', phone: '0779990002' },
+        device: { brand: 'Xiaomi', model: '11T' },
+        faultDescription: 'Battery swap',
+      });
+      const tid = res.body.data._id;
+
+      // In Received stage -> 400 INVOICE_STAGE_INVALID
+      const invReceived = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invReceived.status).toBe(400);
+      expect(invReceived.body.code).toBe('INVOICE_STAGE_INVALID');
+
+      // Move to Diagnosing -> 400 INVOICE_STAGE_INVALID
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      const invDiag = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invDiag.status).toBe(400);
+      expect(invDiag.body.code).toBe('INVOICE_STAGE_INVALID');
+
+      // Move to In repair -> 400 INVOICE_STAGE_INVALID
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+      const invInRepair = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invInRepair.status).toBe(400);
+      expect(invInRepair.body.code).toBe('INVOICE_STAGE_INVALID');
+
+      // Move to Quality check -> 400 INVOICE_STAGE_INVALID
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Quality check' });
+      const invQC = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invQC.status).toBe(400);
+      expect(invQC.body.code).toBe('INVOICE_STAGE_INVALID');
+
+      // Move to Ready -> 200 OK
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Ready' });
+      const invReady = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(invReady.status).toBe(200);
+      expect(invReady.body.data.isInvoiceSettled).toBe(true);
+    });
+
+    // Item 3: changeStage to Cancelled when ticket.isInvoiceSettled -> 400 INVOICE_SETTLED
+    it('Item 3: changeStage to Cancelled when ticket.isInvoiceSettled -> 400 INVOICE_SETTLED', async () => {
+      const shop = await setupShop();
+
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Cancel Invoiced Customer', phone: '0779990003' },
+        device: { brand: 'OnePlus', model: '9 Pro' },
+        faultDescription: 'Camera repair',
+      });
+      const tid = res.body.data._id;
+
+      await advanceToReady(tid, shop.token);
+
+      const inv = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 80_000,
+      });
+      expect(inv.status).toBe(200);
+
+      // Attempt to cancel an already-invoiced ticket
+      const cancelRes = await api('post', `/api/repairs/${tid}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Customer wants to cancel after invoice',
+      });
+      expect(cancelRes.status).toBe(400);
+      expect(cancelRes.body.code).toBe('INVOICE_SETTLED');
+    });
+
+    // Item 4: addPart, removePart, recordApproval: reject (400) when ticket.isInvoiceSettled or stage is Delivered / Unrepairable / Cancelled. recordApproval must not overwrite a waived approval.
+    it('Item 4: addPart, removePart, recordApproval: reject (400) when ticket.isInvoiceSettled or terminal; recordApproval cannot overwrite waived approval', async () => {
+      const shop = await setupShop();
+
+      // Case 4A: isInvoiceSettled rejects addPart and recordApproval
+      const resA = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Test Invoiced Parts', phone: '0779990004' },
+        device: { brand: 'Apple', model: 'iPhone 12' },
+        faultDescription: 'Speaker replacement',
+      });
+      const tidA = resA.body.data._id;
+      await advanceToReady(tidA, shop.token);
+      await api('post', `/api/repairs/${tidA}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+
+      const addPartInv = await api('post', `/api/repairs/${tidA}/parts`, shop.token).send({
+        name: 'Ear Speaker',
+        qty: 1,
+        unitPriceCents: 30_000,
+        unitCostCents: 15_000,
+      });
+      expect(addPartInv.status).toBe(400);
+      expect(addPartInv.body.code).toBe('INVOICE_SETTLED');
+
+      const approvalInv = await api('post', `/api/repairs/${tidA}/approval`, shop.token).send({
+        decision: 'approved',
+      });
+      expect(approvalInv.status).toBe(400);
+      expect(approvalInv.body.code).toBe('INVOICE_SETTLED');
+
+      // Case 4B: Terminal stage Delivered rejects addPart
+      await api('post', `/api/repairs/${tidA}/stage`, shop.token).send({ to: 'Delivered' });
+      const addPartDelivered = await api('post', `/api/repairs/${tidA}/parts`, shop.token).send({
+        name: 'Ear Speaker',
+        qty: 1,
+        unitPriceCents: 30_000,
+        unitCostCents: 15_000,
+      });
+      expect(addPartDelivered.status).toBe(400);
+
+      // Case 4C: Terminal stage Cancelled rejects addPart, removePart, recordApproval
+      const resC = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Cancelled Ticket', phone: '0779990005' },
+        device: { brand: 'Samsung', model: 'S10' },
+        faultDescription: 'No power',
+      });
+      const tidC = resC.body.data._id;
+      await api('post', `/api/repairs/${tidC}/parts`, shop.token).send({
+        name: 'IC Chip',
+        qty: 1,
+        unitPriceCents: 20_000,
+        unitCostCents: 10_000,
+      });
+      const partId = (await api('get', `/api/repairs/${tidC}`, shop.token)).body.data.parts[0]._id;
+
+      await api('post', `/api/repairs/${tidC}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Customer cancelled early',
+      });
+
+      const addPartCancel = await api('post', `/api/repairs/${tidC}/parts`, shop.token).send({
+        name: 'Another Part',
+        qty: 1,
+        unitPriceCents: 10_000,
+        unitCostCents: 5_000,
+      });
+      expect(addPartCancel.status).toBe(400);
+      expect(addPartCancel.body.code).toBe('TERMINAL_STAGE');
+
+      const removePartCancel = await api('delete', `/api/repairs/${tidC}/parts/${partId}`, shop.token);
+      expect(removePartCancel.status).toBe(400);
+      expect(removePartCancel.body.code).toBe('TERMINAL_STAGE');
+
+      const approvalCancel = await api('post', `/api/repairs/${tidC}/approval`, shop.token).send({
+        decision: 'approved',
+      });
+      expect(approvalCancel.status).toBe(400);
+      expect(approvalCancel.body.code).toBe('TERMINAL_STAGE');
+
+      // Case 4D: recordApproval must not overwrite a waived approval
+      const resD = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Waived Approval Ticket', phone: '0779990006' },
+        device: { brand: 'Motorola', model: 'Edge' },
+        faultDescription: 'Broken back glass',
+      });
+      const tidD = resD.body.data._id;
+      await api('post', `/api/repairs/${tidD}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${tidD}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+
+      const overwriteApproval = await api('post', `/api/repairs/${tidD}/approval`, shop.token).send({
+        decision: 'approved',
+      });
+      expect(overwriteApproval.status).toBe(400);
+      expect(overwriteApproval.body.code).toBe('APPROVAL_ALREADY_WAIVED');
+    });
+
+    // Item 7: postAdvanceCancellation: default paymentMethod to ticket.advancePaymentMethod
+    it('Item 7: postAdvanceCancellation defaults paymentMethod to ticket.advancePaymentMethod', async () => {
+      const shop = await setupShop();
+
+      // Intake with card advance Rs 800 (80,000 cents)
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Card Advance Customer', phone: '0779990007' },
+        device: { brand: 'Google', model: 'Pixel 5' },
+        faultDescription: 'Battery drain',
+        advanceCents: 80_000,
+        advancePaymentMethod: 'card',
+      });
+      const tid = res.body.data._id;
+      const tNo = res.body.data.ticketNo;
+
+      // Cancel ticket without passing paymentMethod in request body
+      const cancelRes = await api('post', `/api/repairs/${tid}/stage`, shop.token).send({
+        to: 'Cancelled',
+        note: 'Customer wants card refund',
+        advanceDecision: 'refund',
+      });
+      expect(cancelRes.status).toBe(200);
+
+      // Verify that the cancellation ledger refund credited card account 1020 (not cash 1010)
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ referenceId: tNo, isVoided: false }).lean();
+      });
+      expect(entries).toHaveLength(2);
+
+      const refundEntry = entries.find((e) => e.description.includes('refund'));
+      expect(refundEntry).toBeDefined();
+
+      // Dr 2020 (80k), Cr 1020 (80k card account)
+      const debit2020 = refundEntry.lines.find((l) => l.accountCode === '2020');
+      const credit1020 = refundEntry.lines.find((l) => l.accountCode === '1020');
+      expect(debit2020).toBeDefined();
+      expect(debit2020.debit).toBe(80_000);
+      expect(credit1020).toBeDefined();
+      expect(credit1020.credit).toBe(80_000);
+    });
+
+    // Item 8: Warranty: store deliveredAt when a ticket reaches Delivered. warrantyExpiresAt = deliveredAt + warrantyDays (set it when delivered if warrantyDays already exists, or when warranty is set after delivery). Before delivery, store only warrantyDays.
+    it('Item 8: Warranty sets deliveredAt upon delivery; warrantyExpiresAt calculated on delivery or when set post-delivery', async () => {
+      const shop = await setupShop();
+
+      // Case 8A: warrantyDays set before delivery
+      const resA = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Warranty Pre-Delivery', phone: '0779990008' },
+        device: { brand: 'Apple', model: 'iPhone 11' },
+        faultDescription: 'Battery replacement',
+      });
+      const tidA = resA.body.data._id;
+
+      // Set warranty to 30 days before delivery
+      const setW = await api('post', `/api/repairs/${tidA}/warranty`, shop.token).send({ days: 30 });
+      expect(setW.status).toBe(200);
+      expect(setW.body.data.warrantyDays).toBe(30);
+      expect(setW.body.data.warrantyExpiresAt).toBeNull();
+      expect(setW.body.data.deliveredAt).toBeNull();
+
+      // Advance to Ready, invoice, and deliver
+      await advanceToReady(tidA, shop.token);
+      await api('post', `/api/repairs/${tidA}/invoice`, shop.token).send({ paymentMethod: 'cash', labourCents: 50_000 });
+      const delivResA = await api('post', `/api/repairs/${tidA}/stage`, shop.token).send({ to: 'Delivered' });
+      expect(delivResA.status).toBe(200);
+      expect(delivResA.body.data.deliveredAt).toBeTruthy();
+      expect(delivResA.body.data.warrantyExpiresAt).toBeTruthy();
+
+      const deliveredAtA = new Date(delivResA.body.data.deliveredAt);
+      const expiresAtA = new Date(delivResA.body.data.warrantyExpiresAt);
+      const diffDaysA = Math.round((expiresAtA.getTime() - deliveredAtA.getTime()) / (24 * 60 * 60 * 1000));
+      expect(diffDaysA).toBe(30);
+
+      // Case 8B: warrantyDays set after delivery
+      const resB = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Warranty Post-Delivery', phone: '0779990009' },
+        device: { brand: 'Apple', model: 'iPhone XR' },
+        faultDescription: 'Screen replacement',
+      });
+      const tidB = resB.body.data._id;
+      await advanceToReady(tidB, shop.token);
+      await api('post', `/api/repairs/${tidB}/invoice`, shop.token).send({ paymentMethod: 'cash', labourCents: 60_000 });
+      const delivResB = await api('post', `/api/repairs/${tidB}/stage`, shop.token).send({ to: 'Delivered' });
+      expect(delivResB.status).toBe(200);
+      expect(delivResB.body.data.deliveredAt).toBeTruthy();
+      expect(delivResB.body.data.warrantyExpiresAt).toBeNull();
+
+      // Set warranty to 60 days after delivery
+      const setWPost = await api('post', `/api/repairs/${tidB}/warranty`, shop.token).send({ days: 60 });
+      expect(setWPost.status).toBe(200);
+      expect(setWPost.body.data.warrantyDays).toBe(60);
+      expect(setWPost.body.data.warrantyExpiresAt).toBeTruthy();
+
+      const deliveredAtB = new Date(delivResB.body.data.deliveredAt);
+      const expiresAtB = new Date(setWPost.body.data.warrantyExpiresAt);
+      const diffDaysB = Math.round((expiresAtB.getTime() - deliveredAtB.getTime()) / (24 * 60 * 60 * 1000));
+      expect(diffDaysB).toBe(60);
+    });
+
+    // Item 9: checkWarrantyExpiry: add warrantyAlertSentAt on the ticket, skip tickets already alerted, set it only after notify() succeeds. Test that two runs send one alert.
+    it('Item 9: checkWarrantyExpiry sets warrantyAlertSentAt after notify() succeeds and two runs send one alert', async () => {
+      const shop = await setupShop();
+      const baseDate = new Date();
+
+      const tRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Expiry Alert Test Customer', phone: '0779990010' },
+        device: { brand: 'OnePlus', model: '8T' },
+        faultDescription: 'Display swap',
+      });
+      const tid = tRes.body.data._id;
+
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        await RepairTicket.findByIdAndUpdate(tid, {
+          deliveredAt: baseDate,
+          warrantyDays: 90,
+          warrantyExpiresAt: new Date(baseDate.getTime() + 10 * 60 * 60 * 1000), // in 10 hours (within 24h)
+          warrantyAlertSentAt: null,
+        });
+      });
+
+      // Run 1: Sends alert and sets warrantyAlertSentAt
+      const run1 = await repairsService.checkWarrantyExpiry(shop.tenantId);
+      expect(run1).toHaveLength(1);
+      expect(run1[0].ticketNo).toBe(tRes.body.data.ticketNo);
+      expect(run1[0].sent).toBe(true);
+
+      const ticketAfterRun1 = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(tid).lean();
+      });
+      expect(ticketAfterRun1.warrantyAlertSentAt).toBeTruthy();
+
+      // Run 2: Ticket already alerted, so it must be skipped
+      const run2 = await repairsService.checkWarrantyExpiry(shop.tenantId);
+      expect(run2).toHaveLength(0);
+    });
+  });
 });
+
 

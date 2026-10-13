@@ -369,7 +369,7 @@ export async function stage(req, res) {
     note,
     advanceDecision,
     feeCents: Number(feeCents) || 0,
-    paymentMethod: paymentMethod || 'cash',
+    paymentMethod: paymentMethod || null,
     waiveApproval: Boolean(waiveApproval),
     user: userOf(req),
   });
