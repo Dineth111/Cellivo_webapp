@@ -72,11 +72,9 @@ This document tracks cross-module questions, architectural assumptions, and revi
    It does NOT touch `customerSnapshot` or `LedgerEntry`.
    Dev 3 should either approve this adapter or take ownership of the function.
 
-45. **`completeSale` transient-error retry and flaky POS concurrency test.**
-   In `pos/services/sale.service.js`, the retry guard checks `err.errorLabels?.has?.('TransientTransactionError')` or `code === 112`.
-   The `.has?.()` call may never match because `errorLabels` is an array in the Node driver, not a Set.
-   Furthermore, the while loop condition is `while (attempts < 5)`, but the catch block checks `attempts < 10`. When transient errors occur under parallel load, `attempts` can exceed 5, causing the loop to exit without setting `createdInvoice` and leading to `TypeError: Cannot read properties of undefined (reading '_id')` at `sale.service.js:562`.
-   This causes `test/pos.test.js` ("guarantees atomic concurrency and gapless sequential numbering") to fail intermittently with a 500 status on both `origin/main` and feature branches. Dev 3 / Dev 4 should harmonize the retry counter condition and `errorLabels` inspection.
+45. **`completeSale` retry counter mismatch and flaky POS concurrency test.**
+   In `pos/services/sale.service.js`, the while loop condition is `while (attempts < 5)` at line 373, but the transient error catch block checks `attempts < 10` at line 553. When transient errors occur under parallel load, `attempts` can reach 5, causing the loop to exit without assigning `createdInvoice` and leading to `TypeError: Cannot read properties of undefined (reading '_id')` at `sale.service.js:562` (HTTP 500).
+   This causes `test/pos.test.js` ("guarantees atomic concurrency and gapless sequential numbering") to fail intermittently with a 500 status on `origin/main` (and feature branches). Dev 3 / Dev 4 should align the loop condition with the retry limit.
 
 ### For Dev 1
 
