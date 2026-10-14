@@ -176,7 +176,7 @@ function StatusContent() {
                 minHeight: 44,
               }}
             >
-              Ticket No + Phone
+              Tracking Code + Phone
             </button>
             <button
               type="button"
@@ -204,14 +204,14 @@ function StatusContent() {
               <>
                 <div>
                   <label htmlFor="ticketNo" style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#374151' }}>
-                    Tracking Code or Ticket Number
+                    Tracking Code (or Ticket Number)
                   </label>
                   <input
                     id="ticketNo"
                     type="text"
                     value={ticketNo}
                     onChange={(e) => setTicketNo(e.target.value)}
-                    placeholder="e.g. 8-char code (A1B2C3D4) or JOB-000001"
+                    placeholder="e.g. 10-char code (3K7NP8WX9Z) or JOB-000001"
                     style={{
                       width: '100%',
                       padding: '12px 14px',
@@ -225,7 +225,7 @@ function StatusContent() {
                 </div>
                 <div>
                   <label htmlFor="shopCode" style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#374151' }}>
-                    Shop Name (Optional if using Tracking Code)
+                    Shop Name (Optional fallback)
                   </label>
                   <input
                     id="shopCode"

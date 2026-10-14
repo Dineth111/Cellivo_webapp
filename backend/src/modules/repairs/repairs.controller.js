@@ -560,8 +560,11 @@ export async function jobCard(req, res) {
   const remainingDue = Math.max(0, estimatedTotal - (ticket.advanceCents || 0));
 
   // WhatsApp message for customer
-  const waText = `Hi ${ticket.customerId?.name || 'Customer'}, your repair job #${ticket.ticketNo} for ${ticket.device.brand} ${ticket.device.model} is registered with Cellivo. Status: ${ticket.stage}.`;
+  const statusUrl = `${config.clientUrl}/status`;
+  const codeText = ticket.publicCode ? ` Tracking code: ${ticket.publicCode}.` : '';
+  const waText = `Hi ${ticket.customerId?.name || 'Customer'}, your repair job #${ticket.ticketNo} for ${ticket.device.brand} ${ticket.device.model} is registered with Cellivo. Status: ${ticket.stage}.${codeText} Live status: ${statusUrl}`;
   const whatsappLink = ticket.customerId?.phone ? buildWhatsAppLink(ticket.customerId.phone, waText) : '';
+
 
   res.json({
     data: {

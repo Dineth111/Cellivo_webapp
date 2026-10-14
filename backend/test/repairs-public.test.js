@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup } from './api.js';
 import { runAsPlatform, runWithContext } from '../src/core/tenantContext.js';
-import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
+import RepairTicket, { publicCodeHelper, PUBLIC_CODE_ALPHABET } from '../src/modules/repairs/models/RepairTicket.model.js';
 import Tenant from '../src/modules/tenants/Tenant.model.js';
 import { setTestLimits, resetTestLimits } from '../src/modules/repairs/utils/rateLimiter.js';
 
@@ -407,4 +407,48 @@ describe('REP-08 Public Repair Status Page', () => {
       balanceCents: 700000,
     });
   });
+
+  it('publicCode generates 10 characters from unconfusable alphabet and retries on duplicate collision', async () => {
+    const owner = await signup('format_test@cellivo.lk', 'Format Test Shop');
+
+    // 1. Format test: 10 chars from alphabet ABCDEFGHJKMNPQRSTUVWXYZ23456789
+    const custRes = await api('post', '/api/customers', owner.token).send({
+      name: 'Format Tester',
+      phone: '0771239876',
+    });
+    const ticketRes1 = await api('post', '/api/repairs', owner.token).send({
+      customerId: custRes.body.data._id,
+      device: { brand: 'OnePlus', model: '11' },
+      faultDescription: 'Format verification test',
+    });
+    expect(ticketRes1.status).toBe(201);
+    const code1 = ticketRes1.body.data.publicCode;
+
+    expect(code1).toBeDefined();
+    expect(code1).toHaveLength(10);
+    expect(code1).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{10}$/);
+    for (const ch of code1) {
+      expect(PUBLIC_CODE_ALPHABET.includes(ch)).toBe(true);
+    }
+
+    // 2. Retry test on collision:
+    // Spy on publicCodeHelper.generate to return code1 on the first call (causing duplicate key error 11000),
+    // and then a fresh code on the retry call.
+    const spy = vi.spyOn(publicCodeHelper, 'generate');
+    const freshCode = '9Z8Y7X6W5V';
+    spy.mockReturnValueOnce(code1).mockReturnValueOnce(freshCode);
+
+    const ticketRes2 = await api('post', '/api/repairs', owner.token).send({
+      customerId: custRes.body.data._id,
+      device: { brand: 'Xiaomi', model: '13 Pro' },
+      faultDescription: 'Retry collision test',
+    });
+
+    expect(ticketRes2.status).toBe(201);
+    expect(ticketRes2.body.data.publicCode).toBe(freshCode);
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    spy.mockRestore();
+  });
 });
+

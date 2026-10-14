@@ -123,15 +123,31 @@ repairTicketSchema.index({ tenantId: 1, technicianId: 1 });
 repairTicketSchema.index({ tenantId: 1, promisedDate: 1 });
 repairTicketSchema.index({ tenantId: 1, warrantyExpiresAt: 1 });
 
+export const PUBLIC_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+export function generatePublicCode(length = 10) {
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    const idx = crypto.randomInt(0, PUBLIC_CODE_ALPHABET.length);
+    result += PUBLIC_CODE_ALPHABET[idx];
+  }
+  return result;
+}
+
+export const publicCodeHelper = {
+  generate: generatePublicCode,
+};
+
 repairTicketSchema.pre('save', function (next) {
   if (!this.trackingToken) {
     this.trackingToken = crypto.randomBytes(24).toString('hex');
   }
   if (!this.publicCode) {
-    this.publicCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    this.publicCode = publicCodeHelper.generate();
   }
   next();
 });
 
 export default mongoose.models.RepairTicket || mongoose.model('RepairTicket', repairTicketSchema);
+
 
