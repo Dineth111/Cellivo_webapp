@@ -58,6 +58,10 @@ export async function create(req, res) {
   const branch = await resolveBranch(req);
   const body = req.body || {};
 
+  if (body.customerId) {
+    requireId(body.customerId, 'customerId');
+  }
+
   const result = await repairsService.createTicket({
     tenantId: req.auth.tenantId,
     branchId: branch._id,
@@ -74,8 +78,8 @@ export async function create(req, res) {
     conditionNotes: body.conditionNotes ? String(body.conditionNotes).trim() : '',
     photoUrls: Array.isArray(body.photoUrls) ? body.photoUrls.map((u) => String(u).trim()).slice(0, 6) : [],
     faultDescription: String(body.faultDescription || '').trim(),
-    estimateCents: Number(body.estimateCents) || 0,
-    advanceCents: Number(body.advanceCents) || 0,
+    estimateCents: body.estimateCents !== undefined && body.estimateCents !== null ? body.estimateCents : 0,
+    advanceCents: body.advanceCents !== undefined && body.advanceCents !== null ? body.advanceCents : 0,
     advancePaymentMethod: body.advancePaymentMethod || 'cash',
     promisedDate: body.promisedDate || null,
     technicianId: body.technicianId || null,
@@ -321,35 +325,19 @@ export async function update(req, res) {
 
   await resolveRecordBranch(req, RepairTicket, id, 'Repair ticket');
 
-  const ticket = await RepairTicket.findById(id);
-  if (!ticket) throw notFound('Repair ticket not found');
-
-  const allowed = pick(req.body, ['conditionNotes', 'faultDescription', 'estimateCents', 'promisedDate', 'accessories', 'internalNotes']);
-
-  const before = {
-    conditionNotes: ticket.conditionNotes,
-    faultDescription: ticket.faultDescription,
-    estimateCents: ticket.estimateCents,
-    promisedDate: ticket.promisedDate,
-    accessories: ticket.accessories,
-    internalNotes: ticket.internalNotes,
-  };
-
-  if (allowed.conditionNotes !== undefined) ticket.conditionNotes = String(allowed.conditionNotes).trim();
-  if (allowed.faultDescription !== undefined) ticket.faultDescription = String(allowed.faultDescription).trim();
-  if (allowed.estimateCents !== undefined) ticket.estimateCents = Math.max(0, Math.round(Number(allowed.estimateCents) || 0));
-  if (allowed.promisedDate !== undefined) ticket.promisedDate = allowed.promisedDate ? new Date(allowed.promisedDate) : null;
-  if (Array.isArray(allowed.accessories)) ticket.accessories = allowed.accessories.map((a) => String(a).trim());
-  if (allowed.internalNotes !== undefined) ticket.internalNotes = String(allowed.internalNotes).trim();
-
-  await ticket.save();
+  const { ticket, before, after } = await repairsService.updateTicket({
+    tenantId: req.auth.tenantId,
+    ticketId: id,
+    data: req.body || {},
+    user: userOf(req),
+  });
 
   await audit.record({
     action: 'repair.updated',
     entity: 'RepairTicket',
     entityId: ticket._id,
     before,
-    after: allowed,
+    after,
     tenantId: req.auth.tenantId,
     userId: req.auth.userId,
   });
@@ -501,11 +489,17 @@ export async function invoice(req, res) {
   await resolveRecordBranch(req, RepairTicket, id, 'Repair ticket');
 
   const { paymentMethod, labourCents } = req.body || {};
+  if (labourCents !== undefined && labourCents !== null) {
+    if (!Number.isInteger(labourCents) || labourCents < 0 || labourCents > 100_000_000) {
+      throw badRequest('Labour cents must be an integer between 0 and 100000000', 'INVALID_LABOUR');
+    }
+  }
+
   const ticket = await repairsService.settleInvoice({
     tenantId: req.auth.tenantId,
     ticketId: id,
     paymentMethod: paymentMethod || 'cash',
-    labourCents: labourCents !== undefined ? Number(labourCents) : null,
+    labourCents: labourCents !== undefined && labourCents !== null ? labourCents : null,
     user: userOf(req),
   });
 

@@ -1668,6 +1668,259 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       expect(lockedRes.body.code).toBe('APPROVAL_LOCKED');
     });
   });
+
+  describe('Ticket Edits Lock, Approval Reset, and Intake/Invoice Validation', () => {
+    it('locked PUT after invoice and when terminal allows only internalNotes and rejects other fields with 400 TICKET_LOCKED', async () => {
+      const shop = await setupShop('put_locked@cellivo.lk', 'Put Lock Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Lock', phone: '0771122334' },
+        device: { brand: 'Google', model: 'Pixel 7' },
+        faultDescription: 'Screen flickering',
+      });
+      const tid = created.body.data._id;
+
+      // Add a part and move to Ready
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'Pixel Display',
+        qty: 1,
+        unitCostCents: 10_000,
+        unitPriceCents: 20_000,
+      });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Quality check' });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Ready' });
+
+      // Invoice the ticket
+      const invRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 5000,
+      });
+      expect(invRes.status).toBe(200);
+
+      // Now PUT on settled ticket: updating conditionNotes or faultDescription returns 400 TICKET_LOCKED
+      const lockedEditRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        faultDescription: 'Attempt to change fault',
+      });
+      expect(lockedEditRes.status).toBe(400);
+      expect(lockedEditRes.body.code).toBe('TICKET_LOCKED');
+
+      // But internalNotes is allowed
+      const noteRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        internalNotes: 'Customer called, pleased with repair',
+      });
+      expect(noteRes.status).toBe(200);
+      expect(noteRes.body.data.internalNotes).toBe('Customer called, pleased with repair');
+
+      // Test on terminal stage: Delivered
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Delivered' });
+      const delEditRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        conditionNotes: 'new scratch',
+      });
+      expect(delEditRes.status).toBe(400);
+      expect(delEditRes.body.code).toBe('TICKET_LOCKED');
+
+      const delNoteRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        internalNotes: 'Post-delivery follow-up completed',
+      });
+      expect(delNoteRes.status).toBe(200);
+    });
+
+    it('estimate change before In repair resets approved approval to none and records history entry', async () => {
+      const shop = await setupShop('est_reset@cellivo.lk', 'Est Reset Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Appr', phone: '0772233445' },
+        device: { brand: 'Apple', model: 'iPhone 13' },
+        faultDescription: 'Broken camera glass',
+        estimateCents: 15_000,
+      });
+      const tid = created.body.data._id;
+
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      const apprRes = await api('post', `/api/repairs/${tid}/approval`, shop.token).send({
+        decision: 'approved',
+        by: 'in_person',
+      });
+      expect(apprRes.status).toBe(200);
+      expect(apprRes.body.data.approval.status).toBe('approved');
+
+      // Update estimate to 25_000
+      const updateRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        estimateCents: 25_000,
+      });
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.data.estimateCents).toBe(25_000);
+      expect(updateRes.body.data.approval.status).toBe('none');
+
+      // Check DB and history
+      const dbTicket = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(tid).lean();
+      });
+      expect(dbTicket.approval.status).toBe('none');
+      expect(dbTicket.approval.at).toBeNull();
+      expect(dbTicket.approval.by).toBeNull();
+      const resetHistory = dbTicket.history.find((h) => h.note.includes('Estimate changed; re-approval needed'));
+      expect(resetHistory).toBeDefined();
+    });
+
+    it('rejects estimate change with 400 ESTIMATE_LOCKED once in In repair or later', async () => {
+      const shop = await setupShop('est_locked@cellivo.lk', 'Est Locked Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer EstLock', phone: '0773344556' },
+        device: { brand: 'Samsung', model: 'A52' },
+        faultDescription: 'Charging port replacement',
+        estimateCents: 8_000,
+      });
+      const tid = created.body.data._id;
+
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+
+      // Change estimate while in In repair
+      const changeRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        estimateCents: 12_000,
+      });
+      expect(changeRes.status).toBe(400);
+      expect(changeRes.body.code).toBe('ESTIMATE_LOCKED');
+    });
+
+    it('rejects invalid promisedDate with 400 INVALID_PROMISED_DATE on create and update', async () => {
+      const shop = await setupShop('bad_date@cellivo.lk', 'Bad Date Shop');
+      const createRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Date', phone: '0774455667' },
+        device: { brand: 'Apple', model: 'iPhone 12' },
+        faultDescription: 'Mic issue',
+        promisedDate: 'invalid-date-string-123',
+      });
+      expect(createRes.status).toBe(400);
+      expect(createRes.body.code).toBe('INVALID_PROMISED_DATE');
+
+      const validCreate = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Date', phone: '0774455667' },
+        device: { brand: 'Apple', model: 'iPhone 12' },
+        faultDescription: 'Mic issue',
+      });
+      const tid = validCreate.body.data._id;
+
+      const updateRes = await api('put', `/api/repairs/${tid}`, shop.token).send({
+        promisedDate: 'not-a-valid-date',
+      });
+      expect(updateRes.status).toBe(400);
+      expect(updateRes.body.code).toBe('INVALID_PROMISED_DATE');
+    });
+
+    it('rejects unknown advancePaymentMethod with 400 INVALID_PAYMENT_METHOD', async () => {
+      const shop = await setupShop('bad_pm@cellivo.lk', 'Bad PM Shop');
+      const createRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer PM', phone: '0775566778' },
+        device: { brand: 'Sony', model: 'Xperia 1' },
+        faultDescription: 'Display black',
+        advanceCents: 5000,
+        advancePaymentMethod: 'bitcoin',
+      });
+      expect(createRes.status).toBe(400);
+      expect(createRes.body.code).toBe('INVALID_PAYMENT_METHOD');
+    });
+
+    it('rejects negative, fractional, or huge advanceCents with 400 INVALID_ADVANCE', async () => {
+      const shop = await setupShop('bad_adv@cellivo.lk', 'Bad Adv Shop');
+      const negRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Adv', phone: '0776677889' },
+        device: { brand: 'OnePlus', model: '11' },
+        faultDescription: 'Battery drain',
+        advanceCents: -500,
+      });
+      expect(negRes.status).toBe(400);
+      expect(negRes.body.code).toBe('INVALID_ADVANCE');
+
+      const hugeRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Adv', phone: '0776677889' },
+        device: { brand: 'OnePlus', model: '11' },
+        faultDescription: 'Battery drain',
+        advanceCents: 100_000_001,
+      });
+      expect(hugeRes.status).toBe(400);
+      expect(hugeRes.body.code).toBe('INVALID_ADVANCE');
+
+      const fracRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Adv', phone: '0776677889' },
+        device: { brand: 'OnePlus', model: '11' },
+        faultDescription: 'Battery drain',
+        advanceCents: 125.5,
+      });
+      expect(fracRes.status).toBe(400);
+      expect(fracRes.body.code).toBe('INVALID_ADVANCE');
+    });
+
+    it('rejects non-http/https photo URLs such as javascript: URLs with 400 INVALID_PHOTO_URL', async () => {
+      const shop = await setupShop('bad_photo@cellivo.lk', 'Bad Photo Shop');
+      const jsUrlRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Photo', phone: '0777788990' },
+        device: { brand: 'Oppo', model: 'Reno 8' },
+        faultDescription: 'Camera blurry',
+        photoUrls: ['javascript:alert(1)'],
+      });
+      expect(jsUrlRes.status).toBe(400);
+      expect(jsUrlRes.body.code).toBe('INVALID_PHOTO_URL');
+
+      const dataUrlRes = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Photo', phone: '0777788990' },
+        device: { brand: 'Oppo', model: 'Reno 8' },
+        faultDescription: 'Camera blurry',
+        photoUrls: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='],
+      });
+      expect(dataUrlRes.status).toBe(400);
+      expect(dataUrlRes.body.code).toBe('INVALID_PHOTO_URL');
+    });
+
+    it('rejects labourCents that is NaN, negative, fractional, or huge with 400 INVALID_LABOUR', async () => {
+      const shop = await setupShop('bad_labour@cellivo.lk', 'Bad Labour Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Customer Labour', phone: '0778899001' },
+        device: { brand: 'Asus', model: 'ROG Phone 6' },
+        faultDescription: 'Overheating fan',
+      });
+      const tid = created.body.data._id;
+
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'Cooling pad',
+        qty: 1,
+        unitPriceCents: 5000,
+      });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Quality check' });
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Ready' });
+
+      // Negative labour
+      const negRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        labourCents: -1000,
+      });
+      expect(negRes.status).toBe(400);
+      expect(negRes.body.code).toBe('INVALID_LABOUR');
+
+      // Fractional labour
+      const fracRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        labourCents: 500.5,
+      });
+      expect(fracRes.status).toBe(400);
+      expect(fracRes.body.code).toBe('INVALID_LABOUR');
+
+      // Huge labour
+      const hugeRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        labourCents: 100_000_001,
+      });
+      expect(hugeRes.status).toBe(400);
+      expect(hugeRes.body.code).toBe('INVALID_LABOUR');
+
+      // Non-integer string / NaN
+      const nanRes = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        labourCents: 'not-a-number',
+      });
+      expect(nanRes.status).toBe(400);
+      expect(nanRes.body.code).toBe('INVALID_LABOUR');
+    });
+  });
 });
 
 

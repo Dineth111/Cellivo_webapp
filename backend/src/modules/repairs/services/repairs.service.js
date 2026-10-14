@@ -9,11 +9,14 @@ import { encryptPasscode, decryptPasscode, hasPasscodeKey } from '../utils/passc
 import { validateImei } from '../utils/imei.js';
 import { reservePart, releasePart } from '../adapters/stock.adapter.js';
 import { postAdvanceDeposit, postRepairInvoice, postAdvanceCancellation } from '../adapters/ledger.adapter.js';
+import { PAYMENT_ACCOUNTS } from '../../pos/services/ledger.service.js';
 import * as notificationsService from '../../notifications/services/notifications.service.js';
 import { runWithContext, runAsPlatform } from '../../../core/tenantContext.js';
 import { badRequest, notFound, forbidden, conflict } from '../../../core/errors.js';
-import { escapeRegex } from '../../../core/validate.js';
+import { escapeRegex, requireId, pick } from '../../../core/validate.js';
 import { hasPermission, hasSpecial } from '../../../core/permissions.js';
+
+export const ALLOWED_PAYMENT_METHODS = Object.keys(PAYMENT_ACCOUNTS);
 
 export const ALLOWED_STAGES = [
   'Received',
@@ -66,11 +69,42 @@ export async function createTicket({
   internalNotes = '',
   user,
 }) {
+  if (customerId) {
+    requireId(customerId, 'customerId');
+  }
+
+  // advancePaymentMethod must be in ALLOWED_PAYMENT_METHODS
+  if (advancePaymentMethod && !ALLOWED_PAYMENT_METHODS.includes(advancePaymentMethod)) {
+    throw badRequest(`Invalid advance payment method: ${advancePaymentMethod}`, 'INVALID_PAYMENT_METHOD');
+  }
+
+  // advanceCents and estimateCents must be integers 0..100000000 (reject, do not coerce)
+  if (estimateCents !== undefined && estimateCents !== null) {
+    if (!Number.isInteger(estimateCents) || estimateCents < 0 || estimateCents > 100000000) {
+      throw badRequest('estimateCents must be an integer between 0 and 100000000', 'INVALID_ESTIMATE');
+    }
+  }
+  if (advanceCents !== undefined && advanceCents !== null) {
+    if (!Number.isInteger(advanceCents) || advanceCents < 0 || advanceCents > 100000000) {
+      throw badRequest('advanceCents must be an integer between 0 and 100000000', 'INVALID_ADVANCE');
+    }
+  }
+
+  // device validation
   if (!device || !device.brand || !device.model) {
     throw badRequest('Device brand and model are required');
   }
-  if (!faultDescription || !faultDescription.trim()) {
-    throw badRequest('Fault description is required');
+  if (typeof device.brand !== 'string' || device.brand.trim().length > 100 || typeof device.model !== 'string' || device.model.trim().length > 100) {
+    throw badRequest('Device brand and model must not exceed 100 characters', 'INVALID_DEVICE');
+  }
+  if (device.imei && (typeof device.imei !== 'string' || device.imei.trim().length > 50)) {
+    throw badRequest('Device IMEI must not exceed 50 characters', 'INVALID_IMEI_LENGTH');
+  }
+  if (device.serial && (typeof device.serial !== 'string' || device.serial.trim().length > 50)) {
+    throw badRequest('Device serial must not exceed 50 characters', 'INVALID_SERIAL_LENGTH');
+  }
+  if (device.colour && (typeof device.colour !== 'string' || device.colour.trim().length > 50)) {
+    throw badRequest('Device colour must not exceed 50 characters', 'INVALID_COLOUR_LENGTH');
   }
 
   // Validate IMEI if provided
@@ -79,6 +113,49 @@ export async function createTicket({
     if (!validateImei(imeiTrimmed)) {
       throw badRequest('Invalid IMEI number (failed Luhn checksum)', 'INVALID_IMEI');
     }
+  }
+
+  // faultDescription non-empty, <= 1000
+  if (!faultDescription || typeof faultDescription !== 'string' || !faultDescription.trim() || faultDescription.trim().length > 1000) {
+    throw badRequest('Fault description is required and must not exceed 1000 characters', 'INVALID_FAULT_DESCRIPTION');
+  }
+
+  // conditionNotes and internalNotes <= 2000
+  if (conditionNotes && (typeof conditionNotes !== 'string' || conditionNotes.length > 2000)) {
+    throw badRequest('Condition notes must not exceed 2000 characters', 'INVALID_CONDITION_NOTES');
+  }
+  if (internalNotes && (typeof internalNotes !== 'string' || internalNotes.length > 2000)) {
+    throw badRequest('Internal notes must not exceed 2000 characters', 'INVALID_INTERNAL_NOTES');
+  }
+
+  // photoUrls: only http/https URLs <= 500 chars, max 6
+  if (photoUrls) {
+    if (!Array.isArray(photoUrls) || photoUrls.length > 6) {
+      throw badRequest('Maximum 6 photo URLs allowed', 'INVALID_PHOTO_URLS');
+    }
+    for (const u of photoUrls) {
+      if (typeof u !== 'string' || u.length > 500 || !/^https?:\/\//i.test(u)) {
+        throw badRequest('Photo URLs must be valid http/https URLs of at most 500 characters', 'INVALID_PHOTO_URL');
+      }
+    }
+  }
+
+  // accessories: <= 20 items of <= 50 chars
+  if (accessories) {
+    if (!Array.isArray(accessories) || accessories.length > 20 || accessories.some((a) => typeof a !== 'string' || a.trim().length > 50)) {
+      throw badRequest('Accessories must be an array of at most 20 items, each up to 50 characters', 'INVALID_ACCESSORIES');
+    }
+  }
+
+  // promisedDate
+  let parsedPromisedDate = null;
+  if (promisedDate) {
+    const d = new Date(promisedDate);
+    const year = d.getFullYear();
+    if (isNaN(d.getTime()) || year < 2000 || year > 2100) {
+      throw badRequest('Invalid promisedDate', 'INVALID_PROMISED_DATE');
+    }
+    parsedPromisedDate = d;
   }
 
   let resolvedCustomer = null;
@@ -151,7 +228,7 @@ export async function createTicket({
         }
 
         // 5. Post advance journal if advance > 0
-        const advCents = Math.max(0, Math.round(advanceCents || 0));
+        const advCents = advanceCents || 0;
         if (advCents > 0) {
           await postAdvanceDeposit({
             tenantId,
@@ -181,11 +258,11 @@ export async function createTicket({
           conditionNotes: conditionNotes ? String(conditionNotes).trim() : '',
           photoUrls: Array.isArray(photoUrls) ? photoUrls.slice(0, 6) : [],
           faultDescription: faultDescription.trim(),
-          estimateCents: Math.max(0, Math.round(estimateCents || 0)),
+          estimateCents: estimateCents || 0,
           advanceCents: advCents,
           advancePaymentMethod,
           advanceSettled: false,
-          promisedDate: promisedDate ? new Date(promisedDate) : null,
+          promisedDate: parsedPromisedDate,
           stage: 'Received',
           technicianId: technicianId || null,
           history: [
@@ -256,6 +333,118 @@ export async function createTicket({
     customer: resolvedCustomer,
     warning: passcodeWarning,
   };
+}
+
+/**
+ * Updates a repair ticket (PUT /:id).
+ * Enforces TICKET_LOCKED, ESTIMATE_LOCKED, approval reset, and field length/type validations.
+ */
+export async function updateTicket({ tenantId, ticketId, data = {}, user }) {
+  return await runWithContext({ tenantId }, async () => {
+    const ticket = await RepairTicket.findById(ticketId);
+    if (!ticket) throw notFound('Repair ticket not found');
+
+    const allowed = pick(data, ['conditionNotes', 'faultDescription', 'estimateCents', 'promisedDate', 'accessories', 'internalNotes']);
+
+    // 1. If ticket.isInvoiceSettled or stage is terminal, reject every field except internalNotes (400 TICKET_LOCKED)
+    const isLocked = ticket.isInvoiceSettled || TERMINAL_STAGES.includes(ticket.stage);
+    if (isLocked) {
+      const nonInternalKeys = Object.keys(data).filter((k) => k !== 'internalNotes');
+      if (nonInternalKeys.length > 0) {
+        throw badRequest('Ticket is locked; only internal notes may be updated', 'TICKET_LOCKED');
+      }
+    }
+
+    // 2. Validate conditionNotes & internalNotes <= 2000 chars
+    if (allowed.conditionNotes !== undefined) {
+      if (typeof allowed.conditionNotes !== 'string' || allowed.conditionNotes.length > 2000) {
+        throw badRequest('Condition notes must not exceed 2000 characters', 'INVALID_CONDITION_NOTES');
+      }
+    }
+    if (allowed.internalNotes !== undefined) {
+      if (typeof allowed.internalNotes !== 'string' || allowed.internalNotes.length > 2000) {
+        throw badRequest('Internal notes must not exceed 2000 characters', 'INVALID_INTERNAL_NOTES');
+      }
+    }
+
+    // 3. Validate faultDescription: non-empty and <= 1000 chars
+    if (allowed.faultDescription !== undefined) {
+      if (typeof allowed.faultDescription !== 'string' || !allowed.faultDescription.trim() || allowed.faultDescription.trim().length > 1000) {
+        throw badRequest('Fault description must be non-empty and not exceed 1000 characters', 'INVALID_FAULT_DESCRIPTION');
+      }
+    }
+
+    // 4. Validate accessories: <= 20 items of <= 50 chars
+    if (allowed.accessories !== undefined) {
+      if (!Array.isArray(allowed.accessories) || allowed.accessories.length > 20 || allowed.accessories.some((a) => typeof a !== 'string' || a.trim().length > 50)) {
+        throw badRequest('Accessories must be an array of at most 20 items, each up to 50 characters', 'INVALID_ACCESSORIES');
+      }
+    }
+
+    // 5. Validate promisedDate: valid date (400 otherwise)
+    if (allowed.promisedDate !== undefined) {
+      if (allowed.promisedDate === null || allowed.promisedDate === '') {
+        ticket.promisedDate = null;
+      } else {
+        const d = new Date(allowed.promisedDate);
+        const year = d.getFullYear();
+        if (isNaN(d.getTime()) || year < 2000 || year > 2100) {
+          throw badRequest('Invalid promisedDate', 'INVALID_PROMISED_DATE');
+        }
+        ticket.promisedDate = d;
+      }
+    }
+
+    // 6. Validate estimateCents
+    if (allowed.estimateCents !== undefined) {
+      if (!Number.isInteger(allowed.estimateCents) || allowed.estimateCents < 0 || allowed.estimateCents > 100000000) {
+        throw badRequest('estimateCents must be an integer between 0 and 100000000', 'INVALID_ESTIMATE');
+      }
+      if (allowed.estimateCents !== ticket.estimateCents) {
+        const inRepairOrLater = ['In repair', 'Quality check', 'Ready', 'Delivered', 'Unrepairable', 'Cancelled'];
+        if (inRepairOrLater.includes(ticket.stage)) {
+          throw badRequest(`Cannot modify estimate once ticket has reached "${ticket.stage}" stage`, 'ESTIMATE_LOCKED');
+        }
+        // Before In repair, if estimateCents changes and approval.status is 'approved', reset approval to 'none' and add history entry
+        if (ticket.approval?.status === 'approved') {
+          ticket.approval = {
+            status: 'none',
+            at: null,
+            by: null,
+            recordedBy: null,
+            waivedBy: null,
+            waivedAt: null,
+          };
+          ticket.history.push({
+            from: ticket.stage,
+            to: ticket.stage,
+            at: new Date(),
+            userId: user._id,
+            note: 'Estimate changed; re-approval needed',
+          });
+        }
+        ticket.estimateCents = allowed.estimateCents;
+      }
+    }
+
+    const before = {
+      conditionNotes: ticket.conditionNotes,
+      faultDescription: ticket.faultDescription,
+      estimateCents: ticket.estimateCents,
+      promisedDate: ticket.promisedDate,
+      accessories: ticket.accessories,
+      internalNotes: ticket.internalNotes,
+    };
+
+    if (allowed.conditionNotes !== undefined) ticket.conditionNotes = allowed.conditionNotes.trim();
+    if (allowed.faultDescription !== undefined) ticket.faultDescription = allowed.faultDescription.trim();
+    if (Array.isArray(allowed.accessories)) ticket.accessories = allowed.accessories.map((a) => a.trim());
+    if (allowed.internalNotes !== undefined) ticket.internalNotes = allowed.internalNotes.trim();
+
+    await ticket.save();
+
+    return { ticket, before, after: allowed };
+  });
 }
 
 /**
@@ -648,8 +837,15 @@ export async function settleInvoice({
           throw badRequest(`Cannot settle invoice while ticket is in "${ticket.stage}". Ticket must be in "Ready" stage.`, 'INVOICE_STAGE_INVALID');
         }
 
-        if (labourCents !== null) {
-          ticket.labourCents = Math.max(0, Math.round(labourCents));
+        if (paymentMethod && !ALLOWED_PAYMENT_METHODS.includes(paymentMethod)) {
+          throw badRequest(`Invalid payment method: ${paymentMethod}`, 'INVALID_PAYMENT_METHOD');
+        }
+
+        if (labourCents !== null && labourCents !== undefined) {
+          if (!Number.isInteger(labourCents) || labourCents < 0 || labourCents > 100_000_000) {
+            throw badRequest('Labour cents must be an integer between 0 and 100000000', 'INVALID_LABOUR');
+          }
+          ticket.labourCents = labourCents;
         }
 
         const partsTotal = ticket.parts.reduce(
@@ -851,7 +1047,9 @@ export default {
   ALLOWED_STAGES,
   TERMINAL_STAGES,
   STAGE_TRANSITIONS,
+  ALLOWED_PAYMENT_METHODS,
   createTicket,
+  updateTicket,
   changeStage,
   assignTechnician,
   recordApproval,
