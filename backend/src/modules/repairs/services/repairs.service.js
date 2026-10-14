@@ -547,18 +547,21 @@ export async function addPart({ tenantId, ticketId, partData, user }) {
     if (TERMINAL_STAGES.includes(ticket.stage)) {
       throw badRequest(`Cannot add parts when ticket is in terminal stage "${ticket.stage}"`, 'TERMINAL_STAGE');
     }
+    if (ticket.parts && ticket.parts.length >= 50) {
+      throw badRequest('Cannot add more than 50 parts to a repair ticket', 'MAX_PARTS_EXCEEDED');
+    }
 
-    const qty = partData.qty !== undefined ? Number(partData.qty) : 1;
-    if (!Number.isInteger(qty) || qty < 1) {
-      throw badRequest('Part quantity must be an integer >= 1', 'INVALID_PART_QTY');
+    const qty = partData.qty !== undefined ? partData.qty : 1;
+    if (!Number.isInteger(qty) || qty < 1 || qty > 1000) {
+      throw badRequest('Part quantity must be an integer between 1 and 1000', 'INVALID_PART_QTY');
     }
-    const unitCostCents = partData.unitCostCents !== undefined ? Number(partData.unitCostCents) : 0;
-    if (!Number.isInteger(unitCostCents) || unitCostCents < 0) {
-      throw badRequest('Part unit cost must be an integer >= 0', 'INVALID_PART_COST');
+    const unitCostCents = partData.unitCostCents !== undefined ? partData.unitCostCents : 0;
+    if (!Number.isInteger(unitCostCents) || unitCostCents < 0 || unitCostCents > 100_000_000) {
+      throw badRequest('Part unit cost must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_COST');
     }
-    const unitPriceCents = partData.unitPriceCents !== undefined ? Number(partData.unitPriceCents) : 0;
-    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0) {
-      throw badRequest('Part unit price must be an integer >= 0', 'INVALID_PART_PRICE');
+    const unitPriceCents = partData.unitPriceCents !== undefined ? partData.unitPriceCents : 0;
+    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 100_000_000) {
+      throw badRequest('Part unit price must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_PRICE');
     }
 
     const reserved = await reservePart({

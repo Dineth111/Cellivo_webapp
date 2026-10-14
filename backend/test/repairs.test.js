@@ -1449,6 +1449,109 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       const run2 = await repairsService.checkWarrantyExpiry(shop.tenantId);
       expect(run2).toHaveLength(0);
     });
+
+    // Requirement: POST /:id/invoice requires repairs.approve
+    it('restricts invoice endpoint to repairs.approve (403 for technician without repairs.approve)', async () => {
+      const shop = await setupShop();
+      const tech = await addStaff(shop, 'technician', 'tech_invoice_test@shop.lk');
+
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Approver Test Customer', phone: '0779990011' },
+        device: { brand: 'Apple', model: 'iPhone 13' },
+        faultDescription: 'Screen issue',
+      });
+      const tid = res.body.data._id;
+      await advanceToReady(tid, shop.token);
+
+      // Technician lacks repairs.approve -> 403
+      const techInv = await api('post', `/api/repairs/${tid}/invoice`, tech.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(techInv.status).toBe(403);
+
+      // Owner has repairs.approve -> 200
+      const ownerInv = await api('post', `/api/repairs/${tid}/invoice`, shop.token).send({
+        paymentMethod: 'cash',
+        labourCents: 50_000,
+      });
+      expect(ownerInv.status).toBe(200);
+    });
+
+    // Requirement: stock.adapter.js reservePart reject (400) instead of coercing.
+    // qty integer 1..1000; unitCostCents/unitPriceCents integer 0..100000000; part name max 100 chars; max 50 parts per ticket.
+    it('rejects negative qty, fractional qty, negative price, and the 51st part', async () => {
+      const shop = await setupShop();
+
+      const res = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Part Validation Customer', phone: '0779990012' },
+        device: { brand: 'Samsung', model: 'S22' },
+        faultDescription: 'Validation test',
+      });
+      const tid = res.body.data._id;
+
+      // Negative qty
+      const negQty = await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'Valid Part Name',
+        qty: -1,
+        unitPriceCents: 1000,
+        unitCostCents: 500,
+      });
+      expect(negQty.status).toBe(400);
+
+      // Fractional qty
+      const fracQty = await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'Valid Part Name',
+        qty: 1.5,
+        unitPriceCents: 1000,
+        unitCostCents: 500,
+      });
+      expect(fracQty.status).toBe(400);
+
+      // Negative price
+      const negPrice = await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'Valid Part Name',
+        qty: 1,
+        unitPriceCents: -500,
+        unitCostCents: 500,
+      });
+      expect(negPrice.status).toBe(400);
+
+      // Part name > 100 chars
+      const longName = await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'A'.repeat(101),
+        qty: 1,
+        unitPriceCents: 1000,
+        unitCostCents: 500,
+      });
+      expect(longName.status).toBe(400);
+
+      // Add 50 parts directly to ticket
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        const ticket = await RepairTicket.findById(tid);
+        ticket.parts = [];
+        for (let i = 0; i < 50; i++) {
+          ticket.parts.push({
+            name: `Part ${i + 1}`,
+            qty: 1,
+            unitCostCents: 100,
+            unitPriceCents: 200,
+            addedAt: new Date(),
+          });
+        }
+        await ticket.save();
+      });
+
+      // 51st part must be rejected with 400
+      const fiftyFirst = await api('post', `/api/repairs/${tid}/parts`, shop.token).send({
+        name: 'The 51st Part',
+        qty: 1,
+        unitPriceCents: 1000,
+        unitCostCents: 500,
+      });
+      expect(fiftyFirst.status).toBe(400);
+      expect(fiftyFirst.body.code).toBe('MAX_PARTS_EXCEEDED');
+    });
   });
 });
 

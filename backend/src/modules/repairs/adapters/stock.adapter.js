@@ -9,16 +9,26 @@ export async function reservePart({ name, sku = null, qty = 1, unitCostCents = 0
   if (!name || typeof name !== 'string' || !name.trim()) {
     throw badRequest('Part name is required');
   }
-  const quantity = Math.max(1, parseInt(qty, 10) || 1);
-  const cost = Math.max(0, Math.round(unitCostCents || 0));
-  const price = Math.max(0, Math.round(unitPriceCents || 0));
+  const trimmedName = name.trim();
+  if (trimmedName.length > 100) {
+    throw badRequest('Part name must be at most 100 characters');
+  }
+  if (!Number.isInteger(qty) || qty < 1 || qty > 1000) {
+    throw badRequest('Part quantity must be an integer between 1 and 1000');
+  }
+  if (!Number.isInteger(unitCostCents) || unitCostCents < 0 || unitCostCents > 100_000_000) {
+    throw badRequest('Part unit cost must be an integer between 0 and 100,000,000 cents');
+  }
+  if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 100_000_000) {
+    throw badRequest('Part unit price must be an integer between 0 and 100,000,000 cents');
+  }
 
   return {
-    name: name.trim(),
+    name: trimmedName,
     sku: sku ? String(sku).trim() : null,
-    qty: quantity,
-    unitCostCents: cost,
-    unitPriceCents: price,
+    qty,
+    unitCostCents,
+    unitPriceCents,
     serial: serial ? String(serial).trim() : null,
     addedAt: new Date(),
     addedBy,

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import RepairTicket from './models/RepairTicket.model.js';
 import repairsService, { ALLOWED_STAGES } from './services/repairs.service.js';
-import { decryptPasscode } from './utils/passcode.js';
+import { decryptPasscode, hasPasscodeKey } from './utils/passcode.js';
 import { resolveBranch, resolveRecordBranch } from '../pos/utils/branch.js';
 import { hasPermission, hasSpecial } from '../../core/permissions.js';
 import { badRequest, notFound, forbidden } from '../../core/errors.js';
@@ -48,6 +48,10 @@ function formatTicketResponse(ticket, role, { revealPasscode = false } = {}) {
   }
 
   return doc;
+}
+
+export async function config(req, res) {
+  res.json({ data: { passcodeEnabled: hasPasscodeKey() } });
 }
 
 export async function create(req, res) {

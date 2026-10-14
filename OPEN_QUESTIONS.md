@@ -115,3 +115,7 @@ Each item states the safe default that was implemented. Confirm or change.
 
 48. **Passcode encryption key.**
    Device passcodes are encrypted with AES-256-GCM using `REPAIR_PASSCODE_KEY`. If the key is unset, passcode storage is disabled with an API warning. Documented in `.env.example`.
+
+49. **Cashier permissions for invoice and delivery.**
+   `POST /api/repairs/:id/invoice` is restricted to `repairs.approve` (branch manager, owner). Cashiers currently have `repairs: 'vc'` (view and create only). Please confirm whether cashiers should be permitted to invoice repairs and mark them `Delivered` at collection time, or if manager approval/role upgrade is required.
+
