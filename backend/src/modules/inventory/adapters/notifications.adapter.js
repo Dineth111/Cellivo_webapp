@@ -3,6 +3,9 @@ import User from '../../users/User.model.js';
 import Role from '../../roles/Role.model.js';
 import { hasSpecial } from '../../../core/permissions.js';
 import { notify } from '../../notifications/services/notifications.service.js';
+import InAppNotification from '../../notifications/models/InAppNotification.model.js';
+import NotificationLog from '../../notifications/models/NotificationLog.model.js';
+import { formatRupees } from '../../pos/money.js';
 
 /**
  * Find active users of the tenant who are shop owners or have inventory.edit permission,
@@ -45,6 +48,7 @@ export async function sendLowStockAlert({ tenantId, branchId, productId, product
     const recipients = await findRecipients(tenantId, branchId);
     if (!recipients.length) return { success: true, count: 0 };
 
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const data = {
       item_name: productName,
       product_name: productName,
@@ -56,7 +60,37 @@ export async function sendLowStockAlert({ tenantId, branchId, productId, product
       branchId: branchId ? String(branchId) : null,
     };
 
+    let sentCount = 0;
     for (const user of recipients) {
+      // Dedupe: check if unread InAppNotification or queued NotificationLog exists from the last 24 hours
+      const isDuplicate = await runWithContext({ tenantId }, async () => {
+        const unreadInApp = await InAppNotification.findOne({
+          tenantId,
+          userId: user._id,
+          readAt: null,
+          createdAt: { $gte: since },
+          'data.productId': String(productId),
+          'data.branchId': branchId ? String(branchId) : null,
+        }).lean();
+        if (unreadInApp) return true;
+
+        const queuedLog = await NotificationLog.findOne({
+          tenantId,
+          userId: user._id,
+          channel: 'in_app',
+          template: 'low_stock',
+          status: { $in: ['queued', 'sending'] },
+          createdAt: { $gte: since },
+          'data.productId': String(productId),
+          'data.branchId': branchId ? String(branchId) : null,
+        }).lean();
+        return !!queuedLog;
+      });
+
+      if (isDuplicate) {
+        continue;
+      }
+
       await notify({
         tenantId,
         branchId: branchId || null,
@@ -67,10 +101,12 @@ export async function sendLowStockAlert({ tenantId, branchId, productId, product
         data,
         session: null,
       });
+      sentCount++;
     }
 
-    return { success: true, count: recipients.length };
+    return { success: true, count: sentCount };
   } catch (err) {
+    console.error('[inventory notify]', err.message);
     return { success: false, error: err.message };
   }
 }
@@ -85,22 +121,55 @@ export async function sendSupplierPaymentReminder({ tenantId, supplierId, suppli
     const recipients = await findRecipients(tenantId, null);
     if (!recipients.length) return { success: true, count: 0 };
 
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const formattedDueDate = dueDate instanceof Date
       ? dueDate.toISOString().split('T')[0]
       : (typeof dueDate === 'string' ? dueDate.split('T')[0] : String(dueDate || ''));
 
+    const formattedAmount = formatRupees(amountCents || 0);
     const data = {
       supplier_name: supplierName || 'Unknown Supplier',
       supplierName: supplierName || 'Unknown Supplier',
       bill_number: billNumber || '',
       billNumber: billNumber || '',
+      amount: formattedAmount,
       amountCents: amountCents || 0,
       due_date: formattedDueDate,
       dueDate: formattedDueDate,
       supplierId: supplierId ? String(supplierId) : '',
     };
 
+    let sentCount = 0;
     for (const user of recipients) {
+      // Dedupe: check if unread InAppNotification or queued NotificationLog exists from the last 24 hours
+      const isDuplicate = await runWithContext({ tenantId }, async () => {
+        const unreadInApp = await InAppNotification.findOne({
+          tenantId,
+          userId: user._id,
+          readAt: null,
+          createdAt: { $gte: since },
+          'data.supplierId': String(supplierId),
+          'data.billNumber': String(billNumber),
+        }).lean();
+        if (unreadInApp) return true;
+
+        const queuedLog = await NotificationLog.findOne({
+          tenantId,
+          userId: user._id,
+          channel: 'in_app',
+          template: 'supplier_payment_reminder',
+          status: { $in: ['queued', 'sending'] },
+          createdAt: { $gte: since },
+          'data.supplierId': String(supplierId),
+          'data.billNumber': String(billNumber),
+        }).lean();
+        return !!queuedLog;
+      });
+
+      if (isDuplicate) {
+        continue;
+      }
+
       await notify({
         tenantId,
         branchId: null,
@@ -111,10 +180,12 @@ export async function sendSupplierPaymentReminder({ tenantId, supplierId, suppli
         data,
         session: null,
       });
+      sentCount++;
     }
 
-    return { success: true, count: recipients.length };
+    return { success: true, count: sentCount };
   } catch (err) {
+    console.error('[inventory notify]', err.message);
     return { success: false, error: err.message };
   }
 }
