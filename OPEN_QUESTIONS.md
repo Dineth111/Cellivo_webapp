@@ -134,6 +134,9 @@ This document tracks cross-module questions, architectural assumptions, and revi
 54. **Cashier permissions for invoice and delivery.**
    `POST /api/repairs/:id/invoice` is restricted to `repairs.approve` (branch manager, owner). Cashiers currently have `repairs: 'vc'` (view and create only). Please confirm whether cashiers should be permitted to invoice repairs and mark them `Delivered` at collection time, or if manager approval/role upgrade is required.
 
+59. **Public repair status rate limiting on serverless (For Dev 1).**
+   The public status check route (`GET/POST /api/public/repairs/status`) implements dual rate limiting per IP and per ticket/token (10 req / 15 min). Rate limit hits are tracked in a MongoDB collection (`public_rate_limits`) with a native TTL index on `expireAt` (with in-memory fallback), allowing it to work safely across serverless / Vercel lambda instances without in-process memory state leakage. If Dev 1 prefers an Upstash Redis store or Edge Middleware rate limiting in production, please advise.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.

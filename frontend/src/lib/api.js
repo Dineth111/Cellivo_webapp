@@ -275,3 +275,26 @@ export const getBranches = () =>
 export const searchRepairParts = (ticketId, q = '') =>
   authFetch(`/repairs/parts/search?ticketId=${encodeURIComponent(ticketId)}&q=${encodeURIComponent(q)}`);
 
+export async function getPublicRepairStatus({ token, ticketNo, phoneLast4 }) {
+  const query = new URLSearchParams();
+  if (token) query.set('token', token.trim());
+  if (ticketNo) query.set('ticketNo', ticketNo.trim());
+  if (phoneLast4) query.set('phoneLast4', phoneLast4.trim());
+
+  const res = await fetch(`${API_BASE}/public/repairs/status?${query.toString()}`, {
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.message || 'Unable to find ticket');
+    err.status = res.status;
+    err.error = body.error;
+    throw err;
+  }
+  return body.data;
+}
+
+

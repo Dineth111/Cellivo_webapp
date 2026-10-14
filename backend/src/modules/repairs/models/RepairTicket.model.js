@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import tenantPlugin from '../../../core/tenantPlugin.js';
 
@@ -102,6 +103,7 @@ const repairTicketSchema = new mongoose.Schema(
     warrantyAlertSentAt: { type: Date, default: null },
     history: { type: [repairHistorySchema], default: [] },
     internalNotes: { type: String, default: '', trim: true },
+    trackingToken: { type: String, unique: true, sparse: true, index: true },
     isArchived: { type: Boolean, default: false, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   },
@@ -112,6 +114,7 @@ repairTicketSchema.plugin(tenantPlugin);
 
 // Unique ticketNo per tenant
 repairTicketSchema.index({ tenantId: 1, ticketNo: 1 }, { unique: true });
+repairTicketSchema.index({ ticketNo: 1 });
 repairTicketSchema.index({ tenantId: 1, stage: 1 });
 repairTicketSchema.index({ tenantId: 1, branchId: 1 });
 repairTicketSchema.index({ tenantId: 1, customerId: 1 });
@@ -119,4 +122,12 @@ repairTicketSchema.index({ tenantId: 1, technicianId: 1 });
 repairTicketSchema.index({ tenantId: 1, promisedDate: 1 });
 repairTicketSchema.index({ tenantId: 1, warrantyExpiresAt: 1 });
 
+repairTicketSchema.pre('save', function (next) {
+  if (!this.trackingToken) {
+    this.trackingToken = crypto.randomBytes(24).toString('hex');
+  }
+  next();
+});
+
 export default mongoose.models.RepairTicket || mongoose.model('RepairTicket', repairTicketSchema);
+

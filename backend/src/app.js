@@ -27,6 +27,7 @@ import posFinanceRoutes from './modules/pos/routes/finance.routes.js';
 import posLoyaltyRoutes from './modules/pos/routes/loyalty.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
 import repairRoutes from './modules/repairs/repairs.routes.js';
+import publicRepairRoutes from './modules/repairs/public.routes.js';
 import inventoryRoutes from './modules/inventory/routes/inventory.routes.js';
 
 export function createApp() {
@@ -66,6 +67,7 @@ export function createApp() {
   app.use('/api/signup', signupRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/repairs', repairRoutes);
+  app.use('/api/public/repairs', publicRepairRoutes);
   app.use('/api/public', publicRoutes);
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
   app.use('/api/pos/ledger', posLedgerRoutes);

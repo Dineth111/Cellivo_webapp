@@ -9,6 +9,7 @@ import { pick, escapeRegex, pageParams, requireId } from '../../core/validate.js
 import { maskPhone, maskNic } from '../customers/utils/mask.js';
 import { buildWhatsAppLink } from '../notifications/utils/whatsapp.js';
 import audit from '../../core/audit.js';
+import { config } from '../../core/config.js';
 
 /**
  * Checks if current user is restricted technician (has repairs.view but not repairs.create, and not owner).
@@ -587,7 +588,10 @@ export async function jobCard(req, res) {
       },
       technician: ticket.technicianId ? { name: ticket.technicianId.name } : null,
       branch: ticket.branchId ? { name: ticket.branchId.name, phone: ticket.branchId.phone } : null,
-      qrPayloadPlaceholder: ticket.ticketNo, // TODO Phase 4: Public status URL
+      qrPayloadPlaceholder: ticket.ticketNo,
+      qrPayload: ticket.trackingToken ? `${config.clientUrl}/status?token=${ticket.trackingToken}` : ticket.ticketNo,
+      publicStatusUrl: ticket.trackingToken ? `${config.clientUrl}/status?token=${ticket.trackingToken}` : null,
+      trackingToken: ticket.trackingToken || null,
       whatsappLink,
     },
   });
