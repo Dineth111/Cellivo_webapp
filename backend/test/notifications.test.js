@@ -681,6 +681,105 @@ describe('Notification Service (F-18 Phase 1)', () => {
     const reminder = notifs.find((n) => n.title === 'Supplier Payment Due');
     expect(reminder).toBeTruthy();
     expect(reminder.body).toContain('Apple Lanka');
+    expect(reminder.body).toContain('Rs 150,000.00');
     expect(reminder.body).toContain('2026-11-01');
+  });
+
+  it('dedupes low_stock and supplier_payment_reminder notifications within 24h', async () => {
+    const shop = await signup('dedupe@shop.lk', 'Dedupe Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+    const ownerUserId = me._id;
+    const productId = new mongoose.Types.ObjectId();
+    const supplierId = new mongoose.Types.ObjectId();
+
+    // 1. First low stock alert -> sent
+    const res1 = await sendLowStockAlert({
+      tenantId,
+      branchId: me.branchIds[0],
+      productId,
+      productName: 'USB-C Cable',
+      currentQty: 1,
+      reorderLevel: 10,
+    });
+    expect(res1.success).toBe(true);
+    expect(res1.count).toBe(1);
+    await processQueue();
+
+    // 2. Duplicate low stock alert within 24h -> skipped
+    const res2 = await sendLowStockAlert({
+      tenantId,
+      branchId: me.branchIds[0],
+      productId,
+      productName: 'USB-C Cable',
+      currentQty: 1,
+      reorderLevel: 10,
+    });
+    expect(res2.success).toBe(true);
+    expect(res2.count).toBe(0);
+    await processQueue();
+
+    // Check only 1 notification exists
+    const stockNotifs = await runWithContext({ tenantId }, async () =>
+      await InAppNotification.find({ tenantId, userId: ownerUserId, 'data.productId': String(productId) }).lean()
+    );
+    expect(stockNotifs.length).toBe(1);
+
+    // 3. First supplier payment reminder -> sent
+    const supp1 = await sendSupplierPaymentReminder({
+      tenantId,
+      supplierId,
+      supplierName: 'Baseus Direct',
+      billNumber: 'BIL-555',
+      amountCents: 4500000,
+      dueDate: '2026-11-15',
+    });
+    expect(supp1.success).toBe(true);
+    expect(supp1.count).toBe(1);
+    await processQueue();
+
+    // 4. Duplicate supplier reminder within 24h -> skipped
+    const supp2 = await sendSupplierPaymentReminder({
+      tenantId,
+      supplierId,
+      supplierName: 'Baseus Direct',
+      billNumber: 'BIL-555',
+      amountCents: 4500000,
+      dueDate: '2026-11-15',
+    });
+    expect(supp2.success).toBe(true);
+    expect(supp2.count).toBe(0);
+    await processQueue();
+
+    const suppNotifs = await runWithContext({ tenantId }, async () =>
+      await InAppNotification.find({ tenantId, userId: ownerUserId, 'data.billNumber': 'BIL-555' }).lean()
+    );
+    expect(suppNotifs.length).toBe(1);
+  });
+
+  it('logs failure with console.error and does not throw when adapter fails', async () => {
+    const errorLogs = [];
+    const origError = console.error;
+    console.error = (...args) => {
+      errorLogs.push(args);
+      origError(...args);
+    };
+
+    try {
+      // Pass an invalid tenantId that causes findRecipients to throw
+      const res = await sendLowStockAlert({
+        tenantId: 'invalid-object-id',
+        branchId: null,
+        productId: 'prod-1',
+        productName: 'Item',
+        currentQty: 1,
+        reorderLevel: 5,
+      });
+
+      expect(res.success).toBe(false);
+      expect(errorLogs.some((args) => args[0] === '[inventory notify]')).toBe(true);
+    } finally {
+      console.error = origError;
+    }
   });
 });
