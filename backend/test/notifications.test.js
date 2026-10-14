@@ -15,6 +15,10 @@ import { maskPhone, maskEmail } from '../src/modules/notifications/utils/mask.js
 import { buildWhatsAppLink } from '../src/modules/notifications/utils/whatsapp.js';
 import { setSmsProvider, setEmailProvider, resetProviders } from '../src/modules/notifications/providers/provider.interface.js';
 import { forgotPassword } from '../src/modules/auth/auth.service.js';
+import { sendLowStockAlert, sendSupplierPaymentReminder } from '../src/modules/inventory/adapters/notifications.adapter.js';
+import User from '../src/modules/users/User.model.js';
+import Role from '../src/modules/roles/Role.model.js';
+import Branch from '../src/modules/branches/Branch.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -591,5 +595,92 @@ describe('Notification Service (F-18 Phase 1)', () => {
     const filterRes = await api('get', '/api/notifications/logs?status=sending', shop.token);
     expect(filterRes.status).toBe(200);
     expect(filterRes.body.data.some((l) => l.status === 'sending')).toBe(true);
+  });
+
+  it('sends in-app low_stock alert to owner and manager respecting branch isolation', async () => {
+    const shop = await signup('stockalert@shop.lk', 'Stock Alert Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+    const ownerUserId = me._id;
+
+    // Create branch 2
+    const branch2 = await runWithContext({ tenantId }, async () =>
+      await Branch.create({ name: 'Branch 2', invoicePrefix: 'BR2', address: 'Kandy' })
+    );
+    const branch1Id = me.branchIds[0];
+    const branch2Id = branch2._id;
+
+    // Find branch_manager role
+    const managerRole = await runWithContext({ tenantId }, async () =>
+      await Role.findOne({ tenantId, key: 'branch_manager' })
+    );
+
+    // Create manager user assigned ONLY to branch 2
+    const mgr2 = await runWithContext({ tenantId }, async () =>
+      await User.create({
+        name: 'Branch 2 Manager',
+        email: 'mgr2@shop.lk',
+        passwordHash: '$2b$10$abcdefghijklmnopqrstuv',
+        roleId: managerRole._id,
+        branchIds: [branch2Id],
+        isActive: true,
+      })
+    );
+
+    // Trigger low stock alert for branch 1
+    const res = await sendLowStockAlert({
+      tenantId,
+      branchId: branch1Id,
+      productId: new mongoose.Types.ObjectId(),
+      productName: 'iPhone 13 Screen',
+      currentQty: 2,
+      reorderLevel: 5,
+    });
+    expect(res.success).toBe(true);
+    // Owner has view_all_branches so receives it; mgr2 is only branch2 so should NOT receive it
+    expect(res.count).toBe(1);
+
+    await processQueue();
+
+    const ownerNotifs = await runWithContext({ tenantId }, async () =>
+      await InAppNotification.find({ tenantId, userId: ownerUserId }).lean()
+    );
+    expect(ownerNotifs.length).toBe(1);
+    expect(ownerNotifs[0].title).toBe('Low Stock Alert');
+    expect(ownerNotifs[0].body).toContain('iPhone 13 Screen');
+    expect(ownerNotifs[0].body).toContain('2 units');
+
+    const mgrNotifs = await runWithContext({ tenantId }, async () =>
+      await InAppNotification.find({ tenantId, userId: mgr2._id }).lean()
+    );
+    expect(mgrNotifs.length).toBe(0);
+  });
+
+  it('sends supplier_payment_reminder in-app notification to owner and manager', async () => {
+    const shop = await signup('suppalert@shop.lk', 'Supplier Alert Shop');
+    const me = (await api('get', '/api/auth/me', shop.token)).body.data;
+    const tenantId = me.tenant._id;
+    const ownerUserId = me._id;
+
+    const res = await sendSupplierPaymentReminder({
+      tenantId,
+      supplierId: new mongoose.Types.ObjectId(),
+      supplierName: 'Apple Lanka',
+      billNumber: 'BILL-909',
+      amountCents: 15000000,
+      dueDate: '2026-11-01',
+    });
+    expect(res.success).toBe(true);
+    expect(res.count).toBeGreaterThanOrEqual(1);
+
+    await processQueue();
+
+    const notifs = await runWithContext({ tenantId }, async () =>
+      await InAppNotification.find({ tenantId, userId: ownerUserId }).lean()
+    );
+    const reminder = notifs.find((n) => n.title === 'Supplier Payment Due');
+    expect(reminder).toBeTruthy();
+    expect(reminder.body).toContain('Apple Lanka');
+    expect(reminder.body).toContain('2026-11-01');
   });
 });
