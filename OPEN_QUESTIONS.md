@@ -68,10 +68,11 @@ Each item states the safe default that was implemented. Confirm or change.
    It does NOT touch `customerSnapshot` or `LedgerEntry`.
    Dev 3 should either approve this adapter or take ownership of the function.
 
-39. **`completeSale` transient-error retry.**
+39. **`completeSale` transient-error retry and flaky POS concurrency test.**
    In `pos/services/sale.service.js`, the retry guard checks `err.errorLabels?.has?.('TransientTransactionError')` or `code === 112`.
-   The `.has?.()` call may never match because `errorLabels` is sometimes an array, not a Set.
-   I did not change it in the customers branch — please verify and fix if needed.
+   The `.has?.()` call may never match because `errorLabels` is an array in the Node driver, not a Set.
+   Furthermore, the while loop condition is `while (attempts < 5)`, but the catch block checks `attempts < 10`. When transient errors occur under parallel load, `attempts` can exceed 5, causing the loop to exit without setting `createdInvoice` and leading to `TypeError: Cannot read properties of undefined (reading '_id')` at `sale.service.js:562`.
+   This causes `test/pos.test.js` ("guarantees atomic concurrency and gapless sequential numbering") to fail intermittently with a 500 status on both `origin/main` and feature branches. Dev 3 / Dev 4 should harmonize the retry counter condition and `errorLabels` inspection.
 
 ### For Dev 1
 

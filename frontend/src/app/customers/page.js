@@ -37,6 +37,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -110,7 +111,10 @@ export default function CustomersPage() {
 
   useEffect(() => {
     if (!hasSession()) {
-      Promise.resolve().then(() => setLoading(false));
+      Promise.resolve().then(() => {
+        setIsLoggedIn(false);
+        setLoading(false);
+      });
       return;
     }
     let ignore = false;
@@ -279,7 +283,7 @@ export default function CustomersPage() {
     }
   };
 
-  if (!hasSession()) {
+  if (!isLoggedIn) {
     return (
       <Shell>
         <Alert tone="warning">

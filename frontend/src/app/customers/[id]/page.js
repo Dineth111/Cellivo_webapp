@@ -37,6 +37,7 @@ export default function CustomerProfilePage() {
   const [history, setHistory] = useState(null);
   const [activeTab, setActiveTab] = useState('details'); // 'details' | 'history' | 'loyalty'
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -89,7 +90,10 @@ export default function CustomerProfilePage() {
 
   useEffect(() => {
     if (!hasSession()) {
-      Promise.resolve().then(() => setLoading(false));
+      Promise.resolve().then(() => {
+        setIsLoggedIn(false);
+        setLoading(false);
+      });
       return;
     }
     let ignore = false;
@@ -146,7 +150,7 @@ export default function CustomerProfilePage() {
     }
   };
 
-  if (!hasSession()) {
+  if (!isLoggedIn) {
     return (
       <Shell>
         <Alert tone="warning">
