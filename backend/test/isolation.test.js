@@ -10,7 +10,6 @@ import Session from '../src/modules/auth/Session.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerAccount from '../src/modules/pos/models/LedgerAccount.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
 import InvoiceSequence from '../src/modules/pos/models/InvoiceSequence.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
@@ -29,6 +28,24 @@ import NotificationLog from '../src/modules/notifications/models/NotificationLog
 import InAppNotification from '../src/modules/notifications/models/InAppNotification.model.js';
 import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
 import RepairSequence from '../src/modules/repairs/models/RepairSequence.model.js';
+import Category from '../src/modules/inventory/models/Category.model.js';
+import Brand from '../src/modules/inventory/models/Brand.model.js';
+import ProductModel from '../src/modules/inventory/models/ProductModel.model.js';
+import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import StockMovement from '../src/modules/inventory/models/StockMovement.model.js';
+import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
+import Supplier from '../src/modules/inventory/models/Supplier.model.js';
+import StockAdjustment from '../src/modules/inventory/models/StockAdjustment.model.js';
+import StockCount from '../src/modules/inventory/models/StockCount.model.js';
+import PurchaseOrder from '../src/modules/inventory/models/PurchaseOrder.model.js';
+import GoodsReceivedNote from '../src/modules/inventory/models/GoodsReceivedNote.model.js';
+import SupplierBill from '../src/modules/inventory/models/SupplierBill.model.js';
+import SupplierPayment from '../src/modules/inventory/models/SupplierPayment.model.js';
+import PurchaseReturn from '../src/modules/inventory/models/PurchaseReturn.model.js';
+import StockTransfer from '../src/modules/inventory/models/StockTransfer.model.js';
+import WooSyncQueue from '../src/modules/inventory/models/WooSyncQueue.model.js';
+import WooSettings from '../src/modules/inventory/models/WooSettings.model.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -44,7 +61,6 @@ const MODELS = {
   AuditLog,
   LedgerAccount,
   LedgerEntry,
-  FakeStock,
   InvoiceSequence,
   Invoice,
   Payment,
@@ -63,6 +79,24 @@ const MODELS = {
   InAppNotification,
   RepairTicket,
   RepairSequence,
+  Category,
+  Brand,
+  ProductModel,
+  Product,
+  StockLevel,
+  StockMovement,
+  SerialUnit,
+  Supplier,
+  StockAdjustment,
+  StockCount,
+  PurchaseOrder,
+  GoodsReceivedNote,
+  SupplierBill,
+  SupplierPayment,
+  PurchaseReturn,
+  StockTransfer,
+  WooSyncQueue,
+  WooSettings,
 };
 
 async function twoShops() {

@@ -14,11 +14,13 @@ export const DEFAULT_ACCOUNTS = [
   { code: '2010', name: 'Tax payable', type: 'liability' },
   { code: '2020', name: 'Store credit', type: 'liability' },
   { code: '2030', name: 'Loyalty liability', type: 'liability' },
+  { code: '2040', name: 'Accounts payable', type: 'liability' },
   { code: '4010', name: 'Sales', type: 'revenue' },
   { code: '4020', name: 'Other income', type: 'revenue' },
   { code: '4030', name: 'Sales returns', type: 'revenue' },
   { code: '5010', name: 'COGS', type: 'expense' },
   { code: '5020', name: 'Expenses', type: 'expense' },
+  { code: '5040', name: 'Inventory adjustments', type: 'expense' },
 ];
 
 const ACCOUNT_NAME_MAP = Object.fromEntries(DEFAULT_ACCOUNTS.map((a) => [a.code, a.name]));
