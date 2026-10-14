@@ -83,7 +83,13 @@ export default function NotificationsPage() {
   }, []);
 
   useEffect(() => {
-    loadProfileAndData();
+    let ignore = false;
+    Promise.resolve().then(() => {
+      if (!ignore) loadProfileAndData();
+    });
+    return () => {
+      ignore = true;
+    };
   }, [loadProfileAndData]);
 
   const handleSelectTemplate = (t) => {

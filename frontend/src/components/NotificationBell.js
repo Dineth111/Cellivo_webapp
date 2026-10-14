@@ -29,9 +29,17 @@ export default function NotificationBell() {
   }, []);
 
   useEffect(() => {
-    load();
-    const timer = setInterval(load, 30_000); // Polling every 30s
-    return () => clearInterval(timer);
+    let ignore = false;
+    Promise.resolve().then(() => {
+      if (!ignore) load();
+    });
+    const timer = setInterval(() => {
+      if (!ignore) load();
+    }, 30_000); // Polling every 30s
+    return () => {
+      ignore = true;
+      clearInterval(timer);
+    };
   }, [load]);
 
   useEffect(() => {
