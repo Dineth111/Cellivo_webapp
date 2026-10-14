@@ -12,6 +12,7 @@ import Category from '../src/modules/inventory/models/Category.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
 import * as stockService from '../src/modules/inventory/services/stock.service.js';
 import * as notificationsAdapter from '../src/modules/inventory/adapters/notifications.adapter.js';
+import * as notificationsService from '../src/modules/notifications/services/notifications.service.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -725,7 +726,7 @@ describe('Repairs Stock & IMEI Integration (Phase 3b)', () => {
 
   it('20. shop-owned ticket without customer works across list, board, GET, job card and stage change', async () => {
     const shop = await setupShop();
-    const prod = await createProduct(shop, { initialStock: 1 });
+    const prod = await createProduct(shop, { initialStock: 10, reorderLevel: 2 });
     const imei = makeLuhnImei(35209900200001);
 
     await runWithContext({ tenantId: shop.tenantId }, async () => {
@@ -736,6 +737,8 @@ describe('Repairs Stock & IMEI Integration (Phase 3b)', () => {
         status: 'in_stock',
       });
     });
+
+    const notifySpy = vi.spyOn(notificationsService, 'notify');
 
     const ticket = (await api('post', '/api/repairs', shop.token).send({
       device: { brand: 'Apple', model: 'iPhone 13', imei },
@@ -763,6 +766,11 @@ describe('Repairs Stock & IMEI Integration (Phase 3b)', () => {
     // Stage change
     const stageRes = await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'Diagnosing' });
     expect(stageRes.status).toBe(200);
+
+    // No customer repair notification was sent for shop-owned ticket with customerId = null
+    const repairNotifications = notifySpy.mock.calls.filter(([call]) => call?.template?.startsWith('repair_'));
+    expect(repairNotifications).toHaveLength(0);
+    notifySpy.mockRestore();
   });
 
   it('21. approval not required for shop-owned', async () => {
@@ -869,5 +877,78 @@ describe('Repairs Stock & IMEI Integration (Phase 3b)', () => {
     const statuses = [r1.status, r2.status];
     expect(statuses).toContain(201);
     expect(statuses).toContain(400);
+
+    const failRes = r1.status === 400 ? r1 : r2;
+    expect(failRes.body.message).toContain('already in repair');
+
+    // Unit status is in_repair
+    const unit = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await SerialUnit.findOne({ imei1: imei });
+    });
+    expect(unit.status).toBe('in_repair');
+
+    // Exactly one active repair ticket was created
+    const ticketCount = await runWithContext({ tenantId: shop.tenantId }, async () => {
+      return await RepairTicket.countDocuments({ tenantId: shop.tenantId, 'device.imei': imei });
+    });
+    expect(ticketCount).toBe(1);
+  });
+
+  it('26. in changeStage the write-off journal and ticket.save run in the same transaction (failure rolls back both)', async () => {
+    const shop = await setupShop();
+    const prod = await createProduct(shop, { costPriceCents: 5000, initialStock: 5 });
+    const ticket = await createCustomerTicket(shop);
+
+    await api('post', `/api/repairs/${ticket._id}/parts`, shop.token).send({ productId: prod._id, qty: 1 });
+
+    // Mock RepairTicket.prototype.save to fail when moving to Cancelled
+    const origSave = RepairTicket.prototype.save;
+    let failed = false;
+    RepairTicket.prototype.save = async function (...args) {
+      if (!failed && this._id?.toString() === ticket._id.toString() && this.stage === 'Cancelled') {
+        failed = true;
+        throw new Error('Database save failure simulation during cancellation');
+      }
+      return origSave.apply(this, args);
+    };
+
+    try {
+      const res = await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'Cancelled' });
+      expect(res.status).toBe(500);
+
+      // Verify no write-off ledger entry exists
+      const entries = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await LedgerEntry.find({ tenantId: shop.tenantId, referenceId: ticket.ticketNo, referenceType: 'manual' });
+      });
+      expect(entries).toHaveLength(0);
+
+      // Verify ticket stage and cogsPostedCents rolled back
+      const ticketDoc = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(ticket._id);
+      });
+      expect(ticketDoc.stage).toBe('Received');
+      expect(ticketDoc.cogsPostedCents).toBe(0);
+    } finally {
+      RepairTicket.prototype.save = origSave;
+    }
+  });
+
+  it('27. settleInvoice with total <= 0 returns a clear 400 message', async () => {
+    const shop = await setupShop();
+    const ticket = await createCustomerTicket(shop);
+
+    // Advance to Ready stage without adding parts
+    await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'Diagnosing' });
+    await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'In repair', waiveApproval: true });
+    await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'Quality check' });
+    await api('post', `/api/repairs/${ticket._id}/stage`, shop.token).send({ to: 'Ready' });
+
+    // Settle invoice with labourCents: 0 (total = 0)
+    const res = await api('post', `/api/repairs/${ticket._id}/invoice`, shop.token).send({
+      paymentMethod: 'cash',
+      labourCents: 0,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('greater than 0');
   });
 });

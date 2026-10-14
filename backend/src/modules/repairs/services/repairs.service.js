@@ -1153,7 +1153,7 @@ export async function settleInvoice({
         const totalCents = ticket.labourCents + partsTotal;
 
         if (totalCents <= 0) {
-          throw badRequest('Total repair amount must be greater than 0 to generate invoice');
+          throw badRequest('Total repair amount must be greater than 0 to generate invoice', 'INVALID_INVOICE_TOTAL');
         }
 
         // Calculate delta COGS for inventory-managed parts
