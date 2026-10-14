@@ -10,6 +10,7 @@ import {
   recordRepairApproval,
   addRepairPart,
   removeRepairPart,
+  searchRepairParts,
   settleRepairInvoice,
   setRepairWarranty,
   getTechniciansWorkload,
@@ -104,7 +105,7 @@ export default function RepairTicketDetailPage() {
   const [approvalChannel, setApprovalChannel] = useState('in_person');
   const [recordingApproval, setRecordingApproval] = useState(false);
 
-  // Parts management
+  // Parts management & inventory search
   const [partName, setPartName] = useState('');
   const [partSku, setPartSku] = useState('');
   const [partQty, setPartQty] = useState(1);
@@ -112,6 +113,11 @@ export default function RepairTicketDetailPage() {
   const [partCostRs, setPartCostRs] = useState('');
   const [addingPart, setAddingPart] = useState(false);
   const [removingPartId, setRemovingPartId] = useState(null);
+  const [partSearchQuery, setPartSearchQuery] = useState('');
+  const [partSearchResults, setPartSearchResults] = useState([]);
+  const [searchingParts, setSearchingParts] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [isFreeTextPart, setIsFreeTextPart] = useState(false);
 
   // Invoicing
   const [labourRs, setLabourRs] = useState('');
@@ -189,6 +195,47 @@ export default function RepairTicketDetailPage() {
       });
     }
   }, [searchParams]);
+
+  // Debounced part search from inventory catalogue
+  useEffect(() => {
+    if (!partSearchQuery.trim() || isFreeTextPart || selectedProduct) {
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setSearchingParts(true);
+      try {
+        const res = await searchRepairParts(id, partSearchQuery.trim());
+        setPartSearchResults(res.data || []);
+      } catch {
+        setPartSearchResults([]);
+      } finally {
+        setSearchingParts(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [partSearchQuery, id, isFreeTextPart, selectedProduct]);
+
+
+  const handleSelectProduct = (prod) => {
+    setSelectedProduct(prod);
+    setPartName(prod.name);
+    setPartSku(prod.sku || '');
+    setPartPriceRs(((prod.sellingPriceCents || 0) / 100).toFixed(2));
+    if (prod.averageCostCents !== undefined) {
+      setPartCostRs(((prod.averageCostCents || 0) / 100).toFixed(2));
+    }
+    setPartSearchResults([]);
+  };
+
+  const handleClearSelectedProduct = () => {
+    setSelectedProduct(null);
+    setPartSearchQuery('');
+    setPartName('');
+    setPartSku('');
+    setPartPriceRs('');
+    setPartCostRs('');
+    setPartSearchResults([]);
+  };
 
   const isOwner = profile?.role?.key === 'owner';
   const canApprove = isOwner || profile?.role?.grid?.repairs?.approve === true;
@@ -347,34 +394,50 @@ export default function RepairTicketDetailPage() {
       setError(priceErr);
       return;
     }
-    const costErr = validateRupeeAmount(partCostRs, 'Part cost price');
+    const costErr = canViewCostMargin && !selectedProduct && partCostRs
+      ? validateRupeeAmount(partCostRs, 'Part cost price')
+      : null;
     if (costErr) {
       setError(costErr);
       return;
     }
     const unitPriceCents = parseRupeeToCents(partPriceRs);
-    const unitCostCents = parseRupeeToCents(partCostRs);
+    const unitCostCents = canViewCostMargin && partCostRs ? parseRupeeToCents(partCostRs) : 0;
 
     setAddingPart(true);
     setError('');
     setSuccessMsg('');
     try {
-      await addRepairPart(id, {
-        name: partName.trim(),
-        sku: partSku.trim() || null,
-        qty,
-        unitPriceCents,
-        unitCostCents,
-      });
+      const payload = selectedProduct
+        ? {
+            productId: selectedProduct._id,
+            qty,
+            unitPriceCents,
+          }
+        : {
+            name: partName.trim(),
+            sku: partSku.trim() || null,
+            qty,
+            unitPriceCents,
+            unitCostCents,
+          };
+
+      await addRepairPart(id, payload);
       setSuccessMsg(`Part "${partName.trim()}" added to ticket.`);
-      setPartName('');
-      setPartSku('');
+      handleClearSelectedProduct();
       setPartQty(1);
-      setPartPriceRs('');
-      setPartCostRs('');
       fetchTicket();
     } catch (err) {
-      setError(err.message || 'Failed to add part.');
+      const msg = err.message || '';
+      if (msg.toLowerCase().includes('insufficient') || err.code === 'INSUFFICIENT_STOCK') {
+        setError(`Insufficient stock for "${partName}": available stock in this branch is less than ${qty}.`);
+      } else if (msg.toLowerCase().includes('part_locked') || msg.toLowerCase().includes('back in stock') || msg.toLowerCase().includes('locked')) {
+        setError('Parts are locked because this shop-owned unit is back in stock.');
+      } else if (msg.toLowerCase().includes('invoice') || err.code === 'INVOICE_SETTLED') {
+        setError('Cannot add parts after the invoice has been settled.');
+      } else {
+        setError(msg || 'Failed to add part.');
+      }
     } finally {
       setAddingPart(false);
     }
@@ -390,7 +453,14 @@ export default function RepairTicketDetailPage() {
       setSuccessMsg(`Part removed successfully.`);
       fetchTicket();
     } catch (err) {
-      setError(err.message || 'Failed to remove part.');
+      const msg = err.message || '';
+      if (msg.toLowerCase().includes('part_locked') || msg.toLowerCase().includes('back in stock')) {
+        setError('Cannot remove parts once shop-owned unit is back in stock.');
+      } else if (msg.toLowerCase().includes('recognised') || err.code === 'COGS_ALREADY_POSTED') {
+        setError('Cannot remove parts after cost has been recognised on invoice or write-off.');
+      } else {
+        setError(msg || 'Failed to remove part.');
+      }
     } finally {
       setRemovingPartId(null);
     }
@@ -598,6 +668,12 @@ export default function RepairTicketDetailPage() {
               Stage: {ticket.stage}
             </Badge>
             {ticket.isInvoiceSettled && <Badge tone="success">Invoice Settled</Badge>}
+            {ticket.shopOwnedUnit && <Badge>Shop-owned unit</Badge>}
+            {ticket.shopOwnedUnit && (
+              <Badge tone={['Ready', 'Delivered'].includes(ticket.stage) ? 'success' : 'warning'}>
+                Stock: {['Ready', 'Delivered'].includes(ticket.stage) ? 'In Stock' : 'In Repair'}
+              </Badge>
+            )}
           </div>
           <p style={{ color: 'var(--secondary)', fontSize: 13, marginTop: 4 }}>
             Created {date(ticket.createdAt)} · Branch: {ticket.branchId?.name || 'Main Branch'}
@@ -877,10 +953,10 @@ export default function RepairTicketDetailPage() {
         {/* Section 4: Parts Used */}
         <Card title="Parts & Components">
           <div style={{ display: 'grid', gap: 12 }}>
-            <Table head={['Part Name', 'Qty', 'Unit Price', 'Total', ...(canViewCostMargin ? ['Cost'] : []), 'Action']}>
+            <Table head={['Part Name', 'Type', 'Qty', 'Unit Price', 'Total', ...(canViewCostMargin ? ['Cost'] : []), 'Action']}>
               {(ticket.parts || []).length === 0 ? (
                 <tr>
-                  <td colSpan={canViewCostMargin ? 6 : 5} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>
+                  <td colSpan={canViewCostMargin ? 7 : 6} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>
                     No parts added yet.
                   </td>
                 </tr>
@@ -891,12 +967,17 @@ export default function RepairTicketDetailPage() {
                       <strong>{p.name}</strong>
                       {p.sku && <div style={{ fontSize: 11, color: 'var(--muted)' }}>SKU: {p.sku}</div>}
                     </td>
+                    <td>
+                      <Badge tone={p.inventoryManaged ? 'success' : 'neutral'}>
+                        {p.inventoryManaged ? 'Inventory' : 'Custom'}
+                      </Badge>
+                    </td>
                     <td>{p.qty}</td>
                     <td>{money(p.unitPriceCents || 0)}</td>
                     <td>{money((p.qty || 1) * (p.unitPriceCents || 0))}</td>
                     {canViewCostMargin && <td>{money(p.unitCostCents || 0)}</td>}
                     <td>
-                      {!ticket.isInvoiceSettled && !isTerminal && canEdit && (
+                      {!ticket.isInvoiceSettled && !isTerminal && canEdit && !(ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) && (
                         <button
                           type="button"
                           onClick={() => handleRemovePart(p._id, p.name)}
@@ -926,65 +1007,234 @@ export default function RepairTicketDetailPage() {
               <span>{money(partsTotalCents)}</span>
             </div>
 
-            {/* Add Part Form */}
-            {!ticket.isInvoiceSettled && !isTerminal && canEdit && (
-              <form onSubmit={handleAddPart} style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 10 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--label)', textTransform: 'uppercase' }}>
-                  + Add Part To Ticket (Max 50)
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
-                  <Field
-                    label="Part Name *"
-                    value={partName}
-                    onChange={(e) => setPartName(e.target.value)}
-                    placeholder="e.g. OLED Display"
-                    required
-                    style={{ minHeight: 44 }}
-                  />
-                  <Field
-                    label="SKU"
-                    value={partSku}
-                    onChange={(e) => setPartSku(e.target.value)}
-                    placeholder="Optional"
-                    style={{ minHeight: 44 }}
-                  />
-                  <Field
-                    label="Qty (1..1000) *"
-                    type="number"
-                    min="1"
-                    max="1000"
-                    value={partQty}
-                    onChange={(e) => setPartQty(e.target.value)}
-                    required
-                    style={{ minHeight: 44 }}
-                  />
-                  <Field
-                    label="Unit Price (Rs) *"
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={partPriceRs}
-                    onChange={(e) => setPartPriceRs(e.target.value)}
-                    placeholder="0.00"
-                    required
-                    style={{ minHeight: 44 }}
-                  />
-                  {canViewCostMargin && (
+            {/* Shop-owned back in stock locked state */}
+            {ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage) ? (
+              <div style={{ background: 'var(--card-bg, #f8f9fa)', border: '1px solid var(--border)', padding: 14, borderRadius: 8, fontSize: 13, color: 'var(--muted)' }}>
+                🔒 <strong>Parts Locked:</strong> This shop-owned unit is back in stock ({ticket.stage}). Parts cannot be added or removed.
+              </div>
+            ) : !ticket.isInvoiceSettled && !isTerminal && canEdit && (
+              <form onSubmit={handleAddPart} style={{ borderTop: '1px solid var(--border)', paddingTop: 14, display: 'grid', gap: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--label)', textTransform: 'uppercase' }}>
+                    + Add Part To Ticket (Max 50)
+                  </span>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <Button
+                      type="button"
+                      variant={!isFreeTextPart ? 'primary' : 'secondary'}
+                      onClick={() => { setIsFreeTextPart(false); handleClearSelectedProduct(); }}
+                      style={{ fontSize: 12, minHeight: 36, padding: '0 12px' }}
+                    >
+                      Catalogue Part
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={isFreeTextPart ? 'primary' : 'secondary'}
+                      onClick={() => { setIsFreeTextPart(true); handleClearSelectedProduct(); }}
+                      style={{ fontSize: 12, minHeight: 36, padding: '0 12px' }}
+                    >
+                      Custom Free-Text
+                    </Button>
+                  </div>
+                </div>
+
+                {!isFreeTextPart ? (
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {!selectedProduct ? (
+                      <div style={{ display: 'grid', gap: 6, position: 'relative' }}>
+                        <Field
+                          label="Search Inventory Product *"
+                          value={partSearchQuery}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setPartSearchQuery(val);
+                            if (!val.trim()) {
+                              setPartSearchResults([]);
+                              setSearchingParts(false);
+                            }
+                          }}
+                          placeholder="Type product name, brand, model or SKU..."
+                          style={{ minHeight: 44 }}
+                        />
+                        {searchingParts && (
+                          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: -4 }}>Searching catalogue...</div>
+                        )}
+                        {partSearchResults.length > 0 && (
+                          <div
+                            style={{
+                              border: '1px solid var(--border)',
+                              borderRadius: 8,
+                              background: 'var(--card-bg, #fff)',
+                              boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                              maxHeight: 220,
+                              overflowY: 'auto',
+                              display: 'grid',
+                              gap: 1,
+                            }}
+                          >
+                            {partSearchResults.map((prod) => (
+                              <button
+                                key={prod._id}
+                                type="button"
+                                onClick={() => handleSelectProduct(prod)}
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  padding: '10px 14px',
+                                  background: 'transparent',
+                                  border: 0,
+                                  borderBottom: '1px solid var(--border)',
+                                  textAlign: 'left',
+                                  cursor: 'pointer',
+                                  minHeight: 44,
+                                  width: '100%',
+                                }}
+                              >
+                                <div>
+                                  <strong>{prod.name}</strong>
+                                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                                    {prod.sku ? `SKU: ${prod.sku} · ` : ''}Available stock: {prod.stockQty ?? 0}
+                                  </div>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <div style={{ fontWeight: 700, color: 'var(--brand)' }}>
+                                    {money(prod.sellingPriceCents || 0)}
+                                  </div>
+                                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>Click to pick</span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {partSearchQuery.trim().length > 1 && !searchingParts && partSearchResults.length === 0 && (
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                            No inventory parts found matching &quot;{partSearchQuery}&quot;. You can switch to Custom Free-Text above.
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          padding: '10px 14px',
+                          background: 'var(--success-bg, #e8f5e9)',
+                          border: '1px solid var(--success, #2e7d32)',
+                          borderRadius: 8,
+                        }}
+                      >
+                        <div>
+                          <strong>{selectedProduct.name}</strong>
+                          <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                            {selectedProduct.sku ? `SKU: ${selectedProduct.sku} · ` : ''}
+                            Available: {selectedProduct.stockQty ?? 0} in stock
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={handleClearSelectedProduct}
+                          style={{ minHeight: 36, padding: '0 12px', fontSize: 12 }}
+                        >
+                          Change Part
+                        </Button>
+                      </div>
+                    )}
+
+                    {selectedProduct && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+                        <Field
+                          label="Quantity *"
+                          type="number"
+                          min="1"
+                          max="1000"
+                          value={partQty}
+                          onChange={(e) => setPartQty(e.target.value)}
+                          required
+                          style={{ minHeight: 44 }}
+                        />
+                        <Field
+                          label="Selling Price (Rs) *"
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={partPriceRs}
+                          onChange={(e) => setPartPriceRs(e.target.value)}
+                          required
+                          style={{ minHeight: 44 }}
+                        />
+                        {canViewCostMargin && partCostRs && (
+                          <Field
+                            label="Unit Cost (Rs, WAC)"
+                            type="text"
+                            value={partCostRs}
+                            disabled
+                            style={{ minHeight: 44, opacity: 0.8 }}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
                     <Field
-                      label="Unit Cost (Rs)"
+                      label="Part Name *"
+                      value={partName}
+                      onChange={(e) => setPartName(e.target.value)}
+                      placeholder="e.g. OLED Display"
+                      required
+                      style={{ minHeight: 44 }}
+                    />
+                    <Field
+                      label="SKU"
+                      value={partSku}
+                      onChange={(e) => setPartSku(e.target.value)}
+                      placeholder="Optional"
+                      style={{ minHeight: 44 }}
+                    />
+                    <Field
+                      label="Qty (1..1000) *"
+                      type="number"
+                      min="1"
+                      max="1000"
+                      value={partQty}
+                      onChange={(e) => setPartQty(e.target.value)}
+                      required
+                      style={{ minHeight: 44 }}
+                    />
+                    <Field
+                      label="Unit Price (Rs) *"
                       type="number"
                       step="any"
                       min="0"
-                      value={partCostRs}
-                      onChange={(e) => setPartCostRs(e.target.value)}
+                      value={partPriceRs}
+                      onChange={(e) => setPartPriceRs(e.target.value)}
                       placeholder="0.00"
+                      required
                       style={{ minHeight: 44 }}
                     />
-                  )}
-                </div>
-                <Button type="submit" disabled={addingPart} style={{ minHeight: 44, justifySelf: 'start' }}>
-                  {addingPart ? 'Adding Part...' : 'Add Part'}
-                </Button>
+                    {canViewCostMargin && (
+                      <Field
+                        label="Unit Cost (Rs)"
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={partCostRs}
+                        onChange={(e) => setPartCostRs(e.target.value)}
+                        placeholder="0.00"
+                        style={{ minHeight: 44 }}
+                      />
+                    )}
+                  </div>
+                )}
+
+                {(selectedProduct || isFreeTextPart) && (
+                  <Button type="submit" disabled={addingPart} style={{ minHeight: 44, justifySelf: 'start' }}>
+                    {addingPart ? 'Adding Part...' : 'Add Part'}
+                  </Button>
+                )}
               </form>
             )}
           </div>

@@ -272,3 +272,6 @@ export const getRepairsConfig = () =>
 export const getBranches = () =>
   authFetch('/branches');
 
+export const searchRepairParts = (ticketId, q = '') =>
+  authFetch(`/repairs/parts/search?ticketId=${encodeURIComponent(ticketId)}&q=${encodeURIComponent(q)}`);
+
