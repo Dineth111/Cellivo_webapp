@@ -110,15 +110,13 @@ export default function CustomersPage() {
 
   useEffect(() => {
     if (!hasSession()) {
-      Promise.resolve().then(() => setLoading(false));
+      setLoading(false);
       return;
     }
-    let ignore = false;
     getAuthProfile()
-      .then((p) => { if (!ignore) setProfile(p.data); })
+      .then((p) => setProfile(p.data))
       .catch(() => {});
-    Promise.resolve().then(() => { if (!ignore) fetchCustomerList(); });
-    return () => { ignore = true; };
+    fetchCustomerList();
   }, [fetchCustomerList]);
 
   // Handle Create Customer submit
@@ -905,7 +903,7 @@ export default function CustomersPage() {
               >
                 name,phone,email,nic,type,tags,marketing_opt_in
                 <br />
-                Nimal Silva,0771234567,nimal@test.lk,199012345678,retail,&quot;vip, cash&quot;,false
+                Nimal Silva,0771234567,nimal@test.lk,199012345678,retail,"vip, cash",false
               </div>
 
               <Field

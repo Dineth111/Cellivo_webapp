@@ -89,15 +89,13 @@ export default function CustomerProfilePage() {
 
   useEffect(() => {
     if (!hasSession()) {
-      Promise.resolve().then(() => setLoading(false));
+      setLoading(false);
       return;
     }
-    let ignore = false;
     getAuthProfile()
-      .then((p) => { if (!ignore) setProfile(p.data); })
+      .then((p) => setProfile(p.data))
       .catch(() => {});
-    Promise.resolve().then(() => { if (!ignore) loadCustomer(); });
-    return () => { ignore = true; };
+    loadCustomer();
   }, [loadCustomer]);
 
   const handleEditSubmit = async (e) => {
