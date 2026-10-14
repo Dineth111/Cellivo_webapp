@@ -26,6 +26,7 @@ import posCreditRoutes from './modules/pos/routes/credit.routes.js';
 import posFinanceRoutes from './modules/pos/routes/finance.routes.js';
 import posLoyaltyRoutes from './modules/pos/routes/loyalty.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
+import inventoryRoutes from './modules/inventory/routes/inventory.routes.js';
 
 export function createApp() {
   const app = express();
@@ -72,6 +73,7 @@ export function createApp() {
   app.use('/api/pos/finance', posFinanceRoutes);
   app.use('/api/pos/loyalty', posLoyaltyRoutes);
   app.use('/api/pos', posSaleRoutes);
+  app.use('/api/inventory', inventoryRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
