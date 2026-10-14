@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup, addStaff } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
 import request from 'supertest';
 import User from '../src/modules/users/User.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
@@ -23,7 +23,7 @@ async function setupShop(email, name) {
   const tenantId = me.tenant._id;
   await setPin(me._id, '9999');
   await runWithContext({ tenantId }, async () =>
-    FakeStock.create({ branchId: me.branchIds[0], barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 50 })
+    seedStock({ branchId: me.branchIds[0], barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 50 })
   );
   return { ...shop, tenantId, userId: me._id };
 }

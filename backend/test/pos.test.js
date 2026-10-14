@@ -3,7 +3,10 @@ import bcrypt from 'bcryptjs';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup, addStaff, addBranch } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
-import FakeStock from '../src/modules/pos/models/FakeStock.model.js';
+import { seedStock } from '../src/modules/inventory/test/stockSeed.js';
+import Product from '../src/modules/inventory/models/Product.model.js';
+import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
+import SerialUnit from '../src/modules/inventory/models/SerialUnit.model.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import Payment from '../src/modules/pos/models/Payment.model.js';
 import Customer from '../src/modules/customers/Customer.model.js';
@@ -13,6 +16,7 @@ import { posEvents, cleanAllExpiredHeldCarts } from '../src/modules/pos/services
 import HeldCart from '../src/modules/pos/models/HeldCart.model.js';
 import AuditLog from '../src/modules/audit/AuditLog.model.js';
 import LedgerEntry from '../src/modules/pos/models/LedgerEntry.model.js';
+import * as stockAdapter from '../src/modules/pos/adapters/stock.adapter.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -33,7 +37,7 @@ async function setupShop(email = 'pos-f09@shop.lk', name = 'POS Shop') {
 
   // Seed inventory for this shop
   await runWithContext({ tenantId }, async () => {
-    await FakeStock.create([
+    await seedStock([
       {
         branchId,
         barcode: 'BC-PHONE-1',
@@ -170,7 +174,8 @@ describe('POS Sale Backend (F-09) Engine', () => {
 
     // Verify stock was deducted only ONCE
     await runWithContext({ tenantId: shop.tenantId }, async () => {
-      const stock = await FakeStock.findOne({ barcode: 'BC-PHONE-1' });
+      const prod = await Product.findOne({ barcode: 'BC-PHONE-1' });
+      const stock = await StockLevel.findOne({ productId: prod._id });
       expect(stock.qty).toBe(9); // from 10 down to 9 (not 8)
     });
   });
@@ -421,7 +426,8 @@ describe('POS Sale Backend (F-09) Engine', () => {
 
     // Verify stock was restored
     await runWithContext({ tenantId: shopA.tenantId }, async () => {
-      const stock = await FakeStock.findOne({ barcode: 'BC-CASE-1' });
+      const prod = await Product.findOne({ barcode: 'BC-CASE-1' });
+      const stock = await StockLevel.findOne({ productId: prod._id });
       expect(stock.qty).toBe(3); // restored back to 3
     });
   });
@@ -573,7 +579,7 @@ describe('POS review fixes', () => {
     const shop = await setupShop('branch-numbers@shop.lk', 'Branch Numbers Shop');
     const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'COL-' });
     await runWithContext({ tenantId: shop.tenantId }, async () =>
-      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 10 })
+      seedStock({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 10 })
     );
     const sell = (branchId) =>
       api('post', '/api/pos/checkout', shop.token)
@@ -826,7 +832,7 @@ describe('POS review fixes, round 2', () => {
     const manager = await addStaff(shop, 'branch_manager', 'manager-return@shop.lk'); // branch A only
     const branchB = await addBranch(shop.tenantId, { invoicePrefix: 'B2-' });
     await runWithContext({ tenantId: shop.tenantId }, async () =>
-      FakeStock.create({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 5 })
+      seedStock({ branchId: branchB._id, barcode: 'BC-CASE-1', name: 'Silicone Case', sellingPriceCents: 5000, costPriceCents: 2000, qty: 5 })
     );
     const saleB = await api('post', '/api/pos/checkout', shop.token)
       .set('x-branch-id', String(branchB._id))
@@ -857,14 +863,14 @@ describe('POS review fixes, round 2', () => {
         customerNic: '200012345678',
         payments: [{ method: 'cash', amountCents: 4000 }],
       });
-    const stockWith = (imei) => runWithContext({ tenantId: shop.tenantId }, async () => FakeStock.findOne({ 'imeiList.imei': imei }).lean());
+    const stockWith = (imei) => runWithContext({ tenantId: shop.tenantId }, async () => SerialUnit.findOne({ $or: [{ imei1: imei }, { imei2: imei }] }).lean());
     const voidIt = (id) => api('post', `/api/pos/invoices/${id}/void`, shop.token).send({ reason: 'Wrong sale' });
 
     const first = await tradeInSale('490154203237518');
     expect(first.status).toBe(201);
     expect(await stockWith('490154203237518')).not.toBeNull();
     expect((await voidIt(first.body.data._id)).status).toBe(200);
-    expect(await stockWith('490154203237518')).toBeNull();
+    expect((await stockWith('490154203237518')).status).toBe('written_off');
 
     const second = await tradeInSale('356938035643809');
     expect(second.status).toBe(201);
@@ -878,3 +884,185 @@ describe('POS review fixes, round 2', () => {
     expect(blocked.body.code).toBe('CANNOT_VOID_TRADEIN_SOLD');
   });
 });
+
+describe('Dev 4 review: 1. Sellable status (deductStock)', () => {
+  it('deductStock sells only units that are in_stock, or reserved with a matching cartId; throws 400 V-05 on every non-sellable status', async () => {
+    const shop = await setupShop('sellable-status@shop.lk', 'Sellable Status Shop');
+    const { tenantId, branchId } = shop;
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Status Test Phone',
+      barcode: 'PHONE-STATUS',
+      isSerialised: true,
+      sellingPriceCents: 5000000,
+      costPriceCents: 3000000,
+    })).body.data;
+
+    // Seed stock level of 10
+    await runWithContext({ tenantId }, async () => {
+      await StockLevel.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        qty: 10,
+        averageCostCents: 3000000,
+      });
+    });
+
+    const nonSellableStatuses = [
+      'sold',
+      'in_transit',
+      'returned',
+      'with_supplier',
+      'written_off',
+      'in_repair',
+    ];
+
+    // Create serial units for each non-sellable status
+    for (let i = 0; i < nonSellableStatuses.length; i++) {
+      const status = nonSellableStatuses[i];
+      const imei = `35800000000000${i}`;
+      await runWithContext({ tenantId }, async () => {
+        await SerialUnit.create({
+          tenantId,
+          branchId,
+          productId: prod._id,
+          imei1: imei,
+          status,
+          unitCostCents: 3000000,
+        });
+      });
+
+      // Try deducting each non-sellable status -> 400 V-05
+      await expect(
+        stockAdapter.deductStock(tenantId, branchId, imei, 1, null, null)
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'V-05',
+      });
+    }
+
+    // Reserved unit:
+    const reservedImei = '3580000000000RS';
+    await runWithContext({ tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: reservedImei,
+        status: 'reserved',
+        unitCostCents: 3000000,
+        reservation: {
+          cartId: 'CART-CORRECT',
+          reservedUntil: new Date(Date.now() + 15 * 60 * 1000),
+        },
+      });
+    });
+
+    // 1. Reserved with missing cartId -> 400 V-05
+    await expect(
+      stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, null)
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'V-05',
+    });
+
+    // 2. Reserved with wrong cartId -> 400 V-05
+    await expect(
+      stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, 'CART-WRONG')
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'V-05',
+    });
+
+    // 3. Reserved with matching cartId -> succeeds
+    const reservedSuccess = await stockAdapter.deductStock(tenantId, branchId, reservedImei, 1, null, 'CART-CORRECT');
+    expect(reservedSuccess.success).toBe(true);
+    expect(reservedSuccess.deductedQty).toBe(1);
+
+    // in_stock unit -> succeeds
+    const inStockImei = '3580000000000OK';
+    await runWithContext({ tenantId }, async () => {
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: inStockImei,
+        status: 'in_stock',
+        unitCostCents: 3000000,
+      });
+    });
+    const inStockSuccess = await stockAdapter.deductStock(tenantId, branchId, inStockImei, 1, null, null);
+    expect(inStockSuccess.success).toBe(true);
+    expect(inStockSuccess.deductedQty).toBe(1);
+  });
+});
+
+describe('Dev 4 review: 2. Reservations (cart isolation)', () => {
+  it('cart B cannot sell a unit cart A reserved via holdCart / POS checkout', async () => {
+    const shop = await setupShop('cart-reservations@shop.lk', 'Reservation Shop');
+    const { tenantId, branchId } = shop;
+
+    const prod = (await api('post', '/api/inventory/products', shop.token).send({
+      name: 'Reserved Phone',
+      barcode: 'PHONE-RES',
+      isSerialised: true,
+      sellingPriceCents: 5000000,
+      costPriceCents: 3000000,
+    })).body.data;
+
+    const imei = '359000000000001';
+    await runWithContext({ tenantId }, async () => {
+      await StockLevel.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        qty: 1,
+        averageCostCents: 3000000,
+      });
+      await SerialUnit.create({
+        tenantId,
+        branchId,
+        productId: prod._id,
+        imei1: imei,
+        status: 'in_stock',
+        unitCostCents: 3000000,
+      });
+    });
+
+    // Cart A holds the cart with this IMEI
+    const holdRes = await api('post', '/api/pos/cart/hold', shop.token).send({
+      cartName: 'Cart A',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1, unitPriceCents: 5000000 }],
+      cartId: 'CART-A',
+    });
+    expect(holdRes.status).toBe(201);
+
+    // Cart B attempts to checkout with the same IMEI -> refused 400 V-05
+    const cartBRes = await api('post', '/api/pos/checkout', shop.token).send({
+      cartId: 'CART-B',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(cartBRes.status).toBe(400);
+    expect(cartBRes.body.code).toBe('V-05');
+
+    // Cart B checkout without cartId -> also refused 400 V-05
+    const noCartRes = await api('post', '/api/pos/checkout', shop.token).send({
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(noCartRes.status).toBe(400);
+    expect(noCartRes.body.code).toBe('V-05');
+
+    // Cart A completes sale -> 201 Created
+    const cartARes = await api('post', '/api/pos/checkout', shop.token).send({
+      cartId: 'CART-A',
+      lines: [{ productId: prod._id, name: prod.name, imei, qty: 1 }],
+      payments: [{ method: 'cash', amountCents: 5000000 }],
+    });
+    expect(cartARes.status).toBe(201);
+  });
+});
+
+

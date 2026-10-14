@@ -37,48 +37,57 @@ Each item states the safe default that was implemented. Confirm or change.
 25. ~~**Approval PIN lockout is in memory.**~~ **Resolved:** `users.service verifyApprovalPin` + `POST /api/users/verify-pin`; the lockout (5 wrong PINs in 15 min -> locked 15 min, 429 `PIN_LOCKED`) is stored on the requesting user and audited (`pin.verify_failed`, `pin.locked`). The POS adapter calls it.
 26. ~~**PIN in a query string.**~~ **Resolved:** the GET eligibility check ignores any PIN; the PIN-checked variant is `POST /api/pos/credit/customers/:id/eligibility { pin, amountCents }`. Frontend `posApi.js` updated.
 27. ~~**Existing tenants' roles.**~~ **Resolved, no migration:** there are no production tenants yet; existing data is dev/test only and gets the new defaults from a re-seed. See the go-live checklist.
-28. ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
+28: ~~**PIN lock check is not atomic with the compare.**~~ **Resolved:** each attempt is reserved with one `findOneAndUpdate` before the bcrypt compare (only while unlocked; the 5th sets the lock), so parallel requests get at most 5 compares.
 
-## Go-live checklist
+## Inventory, IMEI, Purchasing & WooCommerce review fixes (Dev 4)
 
-- Before importing any real shop data, confirm every role has tradeInLimitCents set.
+29. **DocumentSequence concurrency under MongoDB transactions:** Per-branch atomic counters for GRN, PO, BIL, Supplier Payment, and Purchase Return numbers run inside multi-document transactions with an automatic backoff retry loop (`executeWithSession` / `session.withTransaction`) to handle MongoDB `WriteConflict` / `TransientTransactionError` (code 112) under high parallel load.
+30. **Stock count missing & unknown IMEIs:** During stock count approval, variance is dynamically recomputed against live `StockLevel.qty`. Missing scanned serial units are transitioned to `written_off` via `transitionStatus` (reducing stock and posting Dr 5040 / Cr 1050). Unknown scanned IMEIs are recorded in `unknownImeis` response list and never auto-created into inventory.
+31. **Zero-value GRN ledger entries:** GRNs with total cost 0 update inventory counts but bypass `ledgerService.postJournal` and `SupplierPayment` creation (which strictly requires `amountCents >= 1`).
+32. **Cash GRN with no open session:** Cash GRNs record a cash-out via `financeService.recordCashOut` using reason `GRN <documentNumber>`. If the receiving user does not have an open cash drawer session at that branch, the cash-out will be refused by `financeService`. Confirm whether cash GRNs without an open cashier shift should block receipt or allow a ledger-only fallback.
+33. **Post-commit low-stock alerts:** Low-stock threshold evaluations hook into `session.commitTransaction` and dispatch alerts only after the database transaction successfully commits, preventing phantom alerts on rolled back transactions.
 
 ## Customers review (Dev 5)
 
-29. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
-30. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
-31. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
+34. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
+35. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
+36. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
    - Does NOT change `customerSnapshot` on `Invoice` documents, preserving historical customer details at time of sale.
    - Does NOT touch `LedgerEntry` records (Dev 3's financial ledger remains an immutable double-entry log).
    - Skips `HeldCart` (in-progress transient carts are discarded or left to expire).
    - Self-merges, merges into archived/merged customers, circular merges, and cross-tenant merges are rejected with 400 or 404.
-32. **Customer history scope.**
+37. **Customer history scope.**
    `GET /api/customers/:id/history` returns invoices, payments, returns / credit notes, installment plans and loyalty transactions.
    Repairs (my Phase 3) and devices owned (Dev 4 inventory) return empty arrays until those modules exist.
    Cost prices on invoice lines are masked through `maskCostMargins` unless the caller has the `view_cost_margin` special permission.
 
 ### For Dev 3
 
-33. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
+38. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
    During a customer merge it writes `customerId` on Invoice, CreditNote, InstallmentPlan, LoyaltyTransaction, Quotation and Cheque inside the merge transaction session.
    It does NOT touch `customerSnapshot` or `LedgerEntry`.
    Dev 3 should either approve this adapter or take ownership of the function.
 
-34. **`completeSale` transient-error retry.**
+39. **`completeSale` transient-error retry.**
    In `pos/services/sale.service.js`, the retry guard checks `err.errorLabels?.has?.('TransientTransactionError')` or `code === 112`.
    The `.has?.()` call may never match because `errorLabels` is sometimes an array, not a Set.
    I did not change it in the customers branch — please verify and fix if needed.
 
 ### For Dev 1
 
-35. **`LoyaltySettings` unique-tenantId index.**
+40. **`LoyaltySettings` unique-tenantId index.**
    `LoyaltySettings` makes `tenantId` unique with `schema.path('tenantId')._index = { unique: true }` (private Mongoose field).
    This is necessary because `tenantPlugin` already registers a non-unique `tenantId_1` index via `index: true` on the path, and calling `schema.index({ tenantId: 1 }, { unique: true })` would create a second index definition under the same auto-generated name, causing a MongoDB `createIndex` error at startup.
    Suggest `tenantPlugin` accepts a `{ unique: true }` option so one-per-tenant models do not need the private API.
    An isolation test (`isolation.test.js`, "LoyaltySettings schema constraints") guards the index — it asserts exactly one `{ tenantId: 1 }` index exists, it is unique, and a duplicate insert is rejected with `code 11000`.
 
-36. **Existing phone data and E.164 migration.**
+41. **Existing phone data and E.164 migration.**
    All new writes store phones in E.164 format (`+94771234567`).
    Reads (duplicate check, search, CSV import) use `phoneVariants()` to match legacy formats still in the database (e.g. `0771234567`, `94771234567`).
    `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.
    After that run, `phoneVariants` is still used defensively but should no longer find mismatches.
+
+## Go-live checklist
+
+- Before importing any real shop data, confirm every role has tradeInLimitCents set.
+- Confirm DocumentSequence collection indexes (`tenantId`, `branchId`, `docType`) exist in production MongoDB replica set.
