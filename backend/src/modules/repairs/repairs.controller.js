@@ -592,6 +592,7 @@ export async function jobCard(req, res) {
       qrPayload: ticket.trackingToken ? `${config.clientUrl}/status?token=${ticket.trackingToken}` : ticket.ticketNo,
       publicStatusUrl: ticket.trackingToken ? `${config.clientUrl}/status?token=${ticket.trackingToken}` : null,
       trackingToken: ticket.trackingToken || null,
+      publicCode: ticket.publicCode || null,
       whatsappLink,
     },
   });

@@ -275,10 +275,12 @@ export const getBranches = () =>
 export const searchRepairParts = (ticketId, q = '') =>
   authFetch(`/repairs/parts/search?ticketId=${encodeURIComponent(ticketId)}&q=${encodeURIComponent(q)}`);
 
-export async function getPublicRepairStatus({ token, ticketNo, phoneLast4 }) {
+export async function getPublicRepairStatus({ token, ticketNo, publicCode, shopCode, phoneLast4 }) {
   const query = new URLSearchParams();
   if (token) query.set('token', token.trim());
   if (ticketNo) query.set('ticketNo', ticketNo.trim());
+  if (publicCode) query.set('publicCode', publicCode.trim());
+  if (shopCode) query.set('shopCode', shopCode.trim());
   if (phoneLast4) query.set('phoneLast4', phoneLast4.trim());
 
   const res = await fetch(`${API_BASE}/public/repairs/status?${query.toString()}`, {

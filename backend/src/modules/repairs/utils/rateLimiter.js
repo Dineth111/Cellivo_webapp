@@ -1,8 +1,24 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
+import { config } from '../../../core/config.js';
 
 // Fallback in-memory store for serverless cold-start or disconnected DB
 const inMemoryStore = new Map();
+
+// Module-level promise for TTL index creation (runs once, not per request)
+let ttlIndexPromise = null;
+
+function ensureTtlIndex() {
+  if (!ttlIndexPromise && mongoose.connection?.readyState === 1) {
+    const coll = mongoose.connection.collection('public_rate_limits');
+    ttlIndexPromise = coll
+      .createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, background: true })
+      .catch(() => {
+        ttlIndexPromise = null; // allow retry if connection wasn't ready
+      });
+  }
+  return ttlIndexPromise;
+}
 
 /**
  * Clean up expired in-memory entries periodically
@@ -25,35 +41,71 @@ function checkInMemory(key, limit, windowMs) {
   const existing = inMemoryStore.get(key);
   if (!existing || existing.expireAt <= now) {
     inMemoryStore.set(key, { count: 1, expireAt: now + windowMs });
-    return { allowed: true, remaining: limit - 1, resetAt: new Date(now + windowMs) };
+    return { allowed: true, count: 1, remaining: limit - 1, resetAt: new Date(now + windowMs) };
   }
   existing.count += 1;
   const allowed = existing.count <= limit;
   return {
     allowed,
+    count: existing.count,
     remaining: Math.max(0, limit - existing.count),
     resetAt: new Date(existing.expireAt),
   };
 }
 
+let testLimits = null;
+
 /**
- * Multi-instance rate limit check using MongoDB collection with TTL index
- * and graceful fallback to in-memory store.
+ * Test-only setter for server-side rate limits.
+ * Works strictly when config.env === 'test'.
  */
-export async function checkRateLimit(key, limit = 10, windowMs = 15 * 60 * 1000) {
+export function setTestLimits(limits) {
+  if (config.env === 'test') {
+    testLimits = limits;
+  }
+}
+
+/**
+ * Reset test limits to default server config.
+ */
+export function resetTestLimits() {
+  if (config.env === 'test') {
+    testLimits = null;
+  }
+}
+
+/**
+ * Current rate limits from server config or test overrides.
+ */
+export function getRateLimits() {
+  if (config.env === 'test' && testLimits) {
+    return {
+      ipLimit: testLimits.ipLimit ?? 60,
+      failedAttemptLimit: testLimits.failedAttemptLimit ?? 10,
+      windowMs: testLimits.windowMs ?? 15 * 60 * 1000,
+    };
+  }
+  return {
+    ipLimit: 60,
+    failedAttemptLimit: 10,
+    windowMs: 15 * 60 * 1000,
+  };
+}
+
+/**
+ * Check and increment rate limit for a given key.
+ * Multi-instance rate limit using MongoDB collection with TTL index,
+ * falling back to in-memory store if DB is disconnected.
+ */
+export async function checkRateLimit(key, limit, windowMs = 15 * 60 * 1000) {
   try {
     if (mongoose.connection?.readyState !== 1) {
       return checkInMemory(key, limit, windowMs);
     }
 
-    const coll = mongoose.connection.collection('public_rate_limits');
-    // Ensure TTL index exists (idempotent, fast)
-    try {
-      await coll.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0, background: true });
-    } catch {
-      // index already exists or creation in progress
-    }
+    ensureTtlIndex();
 
+    const coll = mongoose.connection.collection('public_rate_limits');
     const now = new Date();
     const expireAt = new Date(now.getTime() + windowMs);
 
@@ -73,17 +125,46 @@ export async function checkRateLimit(key, limit = 10, windowMs = 15 * 60 * 1000)
 
     return {
       allowed,
+      count,
       remaining: Math.max(0, limit - count),
       resetAt: docExpireAt,
     };
   } catch {
-    // If MongoDB error occurs, fallback to in-memory store
     return checkInMemory(key, limit, windowMs);
   }
 }
 
 /**
- * Reset rate limit for a key (used in tests or manual reset)
+ * Inspect whether a key is currently rate-limited without incrementing.
+ */
+export async function isRateLimited(key, limit) {
+  try {
+    if (mongoose.connection?.readyState !== 1) {
+      cleanInMemoryStore();
+      const existing = inMemoryStore.get(key);
+      if (existing && existing.expireAt > Date.now()) {
+        return existing.count >= limit;
+      }
+      return false;
+    }
+    const coll = mongoose.connection.collection('public_rate_limits');
+    const doc = await coll.findOne({ key, expireAt: { $gt: new Date() } });
+    return (doc?.count || 0) >= limit;
+  } catch {
+    const existing = inMemoryStore.get(key);
+    return (existing?.count || 0) >= limit;
+  }
+}
+
+/**
+ * Record a failed attempt for manual lookup.
+ */
+export async function recordFailedAttempt(key, limit = 10, windowMs = 15 * 60 * 1000) {
+  return await checkRateLimit(key, limit, windowMs);
+}
+
+/**
+ * Reset rate limit for a key (used in tests or manual reset).
  */
 export async function resetRateLimit(key) {
   inMemoryStore.delete(key);
@@ -97,7 +178,7 @@ export async function resetRateLimit(key) {
 }
 
 /**
- * Constant-time string comparison using SHA-256 hashes of equal length
+ * Constant-time string comparison using equal-length SHA-256 buffers.
  */
 export function safeCompare(strA, strB) {
   const hashA = crypto.createHash('sha256').update(String(strA ?? '')).digest();
@@ -106,7 +187,7 @@ export function safeCompare(strA, strB) {
 }
 
 /**
- * Hash a string (e.g. for anonymized rate limit keys)
+ * Hash a string (e.g. for anonymized rate limit keys).
  */
 export function hashString(str) {
   return crypto.createHash('sha256').update(String(str ?? '')).digest('hex');

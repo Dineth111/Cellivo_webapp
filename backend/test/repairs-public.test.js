@@ -4,10 +4,14 @@ import { api, signup } from './api.js';
 import { runAsPlatform, runWithContext } from '../src/core/tenantContext.js';
 import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
 import Tenant from '../src/modules/tenants/Tenant.model.js';
+import { setTestLimits, resetTestLimits } from '../src/modules/repairs/utils/rateLimiter.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
-beforeEach(resetDb);
+beforeEach(async () => {
+  await resetDb();
+  resetTestLimits();
+});
 
 /**
  * Recursive key walker to assert that no forbidden fields leak into public responses.
@@ -161,7 +165,8 @@ describe('REP-08 Public Repair Status Page', () => {
     expect(delta).toBeLessThan(500); // 500ms max variance under local test execution
   });
 
-  it('enforces rate limiting and returns 429 when threshold exceeded', async () => {
+  it('enforces rate limiting and returns 429 when threshold exceeded, ignoring x-test-rate-limit header', async () => {
+    setTestLimits({ failedAttemptLimit: 2, ipLimit: 100 });
     const owner = await signup('shop4@cellivo.lk', 'FastFix Kandy');
     const custRes = await api('post', '/api/customers', owner.token).send({
       name: 'Ruwan Perera',
@@ -174,20 +179,88 @@ describe('REP-08 Public Repair Status Page', () => {
     });
     const ticketNo = ticketRes.body.data.ticketNo;
 
-    // Simulate rate limit of 2 requests
-    const res1 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=5555`)
-      .set('x-test-rate-limit', '2');
-    expect(res1.status).toBe(200);
+    // Successful lookups do not count toward failed attempts
+    const successRes = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=5555`);
+    expect(successRes.status).toBe(200);
 
-    const res2 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=5555`)
-      .set('x-test-rate-limit', '2');
-    expect(res2.status).toBe(200);
+    // Send huge header value to verify it is completely ignored by server config
+    const fail1 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=0000`)
+      .set('x-test-rate-limit', '999999');
+    expect(fail1.status).toBe(404);
 
-    const res3 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=5555`)
-      .set('x-test-rate-limit', '2');
-    expect(res3.status).toBe(429);
-    expect(res3.body.error).toBe('RATE_LIMIT_EXCEEDED');
-    expect(res3.headers['retry-after']).toBe('900');
+    const fail2 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=0000`)
+      .set('x-test-rate-limit', '999999');
+    expect(fail2.status).toBe(404);
+
+    // 3rd failed attempt hits server-side limit of 2 failed attempts
+    const fail3 = await api('get', `/api/public/repairs/status?ticketNo=${ticketNo}&phoneLast4=0000`)
+      .set('x-test-rate-limit', '999999');
+    expect(fail3.status).toBe(429);
+    expect(fail3.body.error).toBe('RATE_LIMIT_EXCEEDED');
+    expect(fail3.headers['retry-after']).toBe('900');
+
+    resetTestLimits();
+  });
+
+  it('two tenants with the same ticket number and same phone suffix each return only their own ticket', async () => {
+    const shopA = await signup('alpha@cellivo.lk', 'Alpha Mobile');
+    const shopB = await signup('beta@cellivo.lk', 'Beta Mobile');
+
+    // Both shops create a customer with phone ending in 1234
+    const custA = (await api('post', '/api/customers', shopA.token).send({
+      name: 'Alpha Customer',
+      phone: '0770001234',
+    })).body.data;
+
+    const custB = (await api('post', '/api/customers', shopB.token).send({
+      name: 'Beta Customer',
+      phone: '0719991234',
+    })).body.data;
+
+    // Both shops create their first ticket (#JOB-000001)
+    const ticketA = (await api('post', '/api/repairs', shopA.token).send({
+      customerId: custA._id,
+      device: { brand: 'Apple', model: 'iPhone 13' },
+      faultDescription: 'Screen issue',
+    })).body.data;
+
+    const ticketB = (await api('post', '/api/repairs', shopB.token).send({
+      customerId: custB._id,
+      device: { brand: 'Samsung', model: 'Galaxy S22' },
+      faultDescription: 'Charging port',
+    })).body.data;
+
+    expect(ticketA.ticketNo).toBe('JOB-000001');
+    expect(ticketB.ticketNo).toBe('JOB-000001');
+
+    const cardA = (await api('get', `/api/repairs/${ticketA._id}/jobcard`, shopA.token)).body.data;
+    const cardB = (await api('get', `/api/repairs/${ticketB._id}/jobcard`, shopB.token)).body.data;
+
+    expect(cardA.publicCode).toBeDefined();
+    expect(cardB.publicCode).toBeDefined();
+    expect(cardA.publicCode).not.toBe(cardB.publicCode);
+
+    // 1. Lookup via publicCode + last 4 digits (unambiguous, no cross-tenant leakage)
+    const resA = await api('get', `/api/public/repairs/status?publicCode=${cardA.publicCode}&phoneLast4=1234`);
+    expect(resA.status).toBe(200);
+    expect(resA.body.data.shopName).toBe('Alpha Mobile');
+    expect(resA.body.data.device.model).toBe('iPhone 13');
+
+    const resB = await api('get', `/api/public/repairs/status?publicCode=${cardB.publicCode}&phoneLast4=1234`);
+    expect(resB.status).toBe(200);
+    expect(resB.body.data.shopName).toBe('Beta Mobile');
+    expect(resB.body.data.device.model).toBe('Galaxy S22');
+
+    // 2. Lookup via ticketNo + shopCode + last 4 digits
+    const resShopA = await api('get', `/api/public/repairs/status?ticketNo=JOB-000001&shopCode=Alpha Mobile&phoneLast4=1234`);
+    expect(resShopA.status).toBe(200);
+    expect(resShopA.body.data.shopName).toBe('Alpha Mobile');
+    expect(resShopA.body.data.device.brand).toBe('Apple');
+
+    const resShopB = await api('get', `/api/public/repairs/status?ticketNo=JOB-000001&shopCode=Beta Mobile&phoneLast4=1234`);
+    expect(resShopB.status).toBe(200);
+    expect(resShopB.body.data.shopName).toBe('Beta Mobile');
+    expect(resShopB.body.data.device.brand).toBe('Samsung');
   });
 
   it('token of another tenant cannot read across tenants', async () => {

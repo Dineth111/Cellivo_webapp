@@ -104,6 +104,7 @@ const repairTicketSchema = new mongoose.Schema(
     history: { type: [repairHistorySchema], default: [] },
     internalNotes: { type: String, default: '', trim: true },
     trackingToken: { type: String, unique: true, sparse: true, index: true },
+    publicCode: { type: String, unique: true, sparse: true, index: true, uppercase: true, trim: true },
     isArchived: { type: Boolean, default: false, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   },
@@ -125,6 +126,9 @@ repairTicketSchema.index({ tenantId: 1, warrantyExpiresAt: 1 });
 repairTicketSchema.pre('save', function (next) {
   if (!this.trackingToken) {
     this.trackingToken = crypto.randomBytes(24).toString('hex');
+  }
+  if (!this.publicCode) {
+    this.publicCode = crypto.randomBytes(4).toString('hex').toUpperCase();
   }
   next();
 });

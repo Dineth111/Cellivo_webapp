@@ -395,6 +395,7 @@ export async function createTicket({
           ],
           internalNotes: internalNotes ? String(internalNotes).trim() : '',
           trackingToken: crypto.randomBytes(24).toString('hex'),
+          publicCode: crypto.randomBytes(4).toString('hex').toUpperCase(),
           createdBy: user._id,
         });
 

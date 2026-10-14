@@ -33,12 +33,25 @@ function StatusContent() {
 
   const [token, setToken] = useState(tokenParam);
   const [ticketNo, setTicketNo] = useState(ticketNoParam);
+  const [shopCode, setShopCode] = useState('');
   const [phoneLast4, setPhoneLast4] = useState('');
   const [useTokenMode, setUseTokenMode] = useState(Boolean(tokenParam));
 
   const [loading, setLoading] = useState(Boolean(tokenParam));
   const [ticket, setTicket] = useState(null);
   const [error, setError] = useState('');
+
+  // Remove token from address bar after load with history.replaceState to avoid leakage
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.search) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('token')) {
+        url.searchParams.delete('token');
+        const cleanUrl = url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : '');
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
+  }, []);
 
   const handleLookup = async (params) => {
     setError('');
@@ -54,7 +67,7 @@ function StatusContent() {
       } else if (err.status === 403) {
         setError('This repair shop service is currently unavailable.');
       } else {
-        setError('Repair ticket not found. Please verify the ticket number and phone number digits.');
+        setError('Repair ticket not found. Please verify the ticket/code, shop name, and phone digits.');
       }
     } finally {
       setLoading(false);
@@ -98,11 +111,12 @@ function StatusContent() {
       handleLookup({ token: token.trim() });
     } else {
       if (!ticketNo.trim() || phoneLast4.replace(/\D/g, '').length < 4) {
-        setError('Please enter both ticket number and the last 4 digits of your phone');
+        setError('Please enter both ticket number/code and the last 4 digits of your phone');
         return;
       }
       handleLookup({
         ticketNo: ticketNo.trim(),
+        shopCode: shopCode.trim() || undefined,
         phoneLast4: phoneLast4.replace(/\D/g, '').slice(-4),
       });
     }
@@ -128,6 +142,9 @@ function StatusContent() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f4f6f8', padding: '24px 16px', fontFamily: 'inherit' }}>
+      <head>
+        <meta name="referrer" content="no-referrer" />
+      </head>
       <div style={{ maxWidth: 640, margin: '0 auto' }}>
         {/* Branding Header */}
         <header style={{ textAlign: 'center', marginBottom: 24 }}>
@@ -187,14 +204,35 @@ function StatusContent() {
               <>
                 <div>
                   <label htmlFor="ticketNo" style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#374151' }}>
-                    Repair Ticket Number
+                    Tracking Code or Ticket Number
                   </label>
                   <input
                     id="ticketNo"
                     type="text"
                     value={ticketNo}
                     onChange={(e) => setTicketNo(e.target.value)}
-                    placeholder="e.g. JOB-000001"
+                    placeholder="e.g. 8-char code (A1B2C3D4) or JOB-000001"
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      borderRadius: 8,
+                      border: '1px solid #d1d5db',
+                      fontSize: 15,
+                      boxSizing: 'border-box',
+                      minHeight: 44,
+                    }}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="shopCode" style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6, color: '#374151' }}>
+                    Shop Name (Optional if using Tracking Code)
+                  </label>
+                  <input
+                    id="shopCode"
+                    type="text"
+                    value={shopCode}
+                    onChange={(e) => setShopCode(e.target.value)}
+                    placeholder="e.g. Apex Cell Fix"
                     style={{
                       width: '100%',
                       padding: '12px 14px',
