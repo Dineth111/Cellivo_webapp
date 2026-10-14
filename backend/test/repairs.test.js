@@ -572,7 +572,7 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       expect(card.financials.advanceCents).toBe(40_000);
       expect(card.financials.remainingDueCents).toBe(80_000);
       expect(card.whatsappLink).toContain('https://wa.me/94771234999');
-      expect(card.qrPayloadPlaceholder).toContain(`/status/${card.ticketNo}`);
+      expect(card.qrPayloadPlaceholder).toBe(card.ticketNo);
     });
   });
 
@@ -1551,6 +1551,121 @@ describe('Repairs Module (F-12 Phase 3)', () => {
       });
       expect(fiftyFirst.status).toBe(400);
       expect(fiftyFirst.body.code).toBe('MAX_PARTS_EXCEEDED');
+    });
+  });
+
+  describe('Technician role validation, notifications, warranty reset, and approval locking', () => {
+    it('(a) assigning a user whose role lacks repairs.edit returns 400 INVALID_TECHNICIAN', async () => {
+      const shop = await setupShop('tech_noedit@cellivo.lk', 'Tech Shop');
+      const cashier = await addStaff(shop, 'cashier', 'cashier_noedit@cellivo.lk');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Kasun', phone: '0771234567' },
+        device: { brand: 'Apple', model: 'iPad Air' },
+        faultDescription: 'Glass cracked',
+      });
+      const tid = created.body.data._id;
+
+      const assignRes = await api('post', `/api/repairs/${tid}/assign`, shop.token).send({
+        technicianId: cashier.id,
+      });
+      expect(assignRes.status).toBe(400);
+      expect(assignRes.body.code).toBe('INVALID_TECHNICIAN');
+    });
+
+    it('(b) the repair_created / repair_status_changed notify data contains no link and has the tenant name as shop', async () => {
+      const notifySpy = vi.spyOn(notificationsService, 'notify').mockResolvedValue({ logId: 'mock-log-id' });
+      const shop = await setupShop('notif_check@cellivo.lk', 'Custom Shop LK');
+
+      // Create ticket
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Sunil', phone: '0771234567' },
+        device: { brand: 'Apple', model: 'iPhone 13' },
+        faultDescription: 'Screen issue',
+      });
+      expect(created.status).toBe(201);
+      const tid = created.body.data._id;
+
+      // Check repair_created notification
+      const createdCall = notifySpy.mock.calls.find((c) => c[0].template === 'repair_created');
+      expect(createdCall).toBeDefined();
+      expect(createdCall[0].data.link).toBeUndefined();
+      expect(createdCall[0].data.shop).toBe('Custom Shop LK');
+      expect(createdCall[0].data.status).toBe('Received');
+
+      // Stage transition to Diagnosing
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      const stageCall = notifySpy.mock.calls.find((c) => c[0].template === 'repair_status_changed');
+      expect(stageCall).toBeDefined();
+      expect(stageCall[0].data.link).toBeUndefined();
+      expect(stageCall[0].data.shop).toBe('Custom Shop LK');
+      expect(stageCall[0].data.status).toBe('Diagnosing');
+
+      notifySpy.mockRestore();
+    });
+
+    it('(c) setWarranty clears the alert flag', async () => {
+      const shop = await setupShop('warranty_flag@cellivo.lk', 'Warranty Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Kamal', phone: '0771234567' },
+        device: { brand: 'Samsung', model: 'S22' },
+        faultDescription: 'Battery replacement',
+      });
+      const tid = created.body.data._id;
+
+      // Set delivered & warranty alert sent flag in db
+      await runWithContext({ tenantId: shop.tenantId }, async () => {
+        const ticket = await RepairTicket.findById(tid);
+        ticket.deliveredAt = new Date();
+        ticket.warrantyDays = 30;
+        ticket.warrantyAlertSentAt = new Date();
+        await ticket.save();
+      });
+
+      // Verify flag is set
+      const beforeDoc = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(tid).lean();
+      });
+      expect(beforeDoc.warrantyAlertSentAt).not.toBeNull();
+
+      // Call POST /api/repairs/:id/warranty with new days
+      const res = await api('post', `/api/repairs/${tid}/warranty`, shop.token).send({ days: 60 });
+      expect(res.status).toBe(200);
+
+      // Check DB: warrantyAlertSentAt must be null
+      const afterDoc = await runWithContext({ tenantId: shop.tenantId }, async () => {
+        return await RepairTicket.findById(tid).lean();
+      });
+      expect(afterDoc.warrantyDays).toBe(60);
+      expect(afterDoc.warrantyAlertSentAt).toBeNull();
+    });
+
+    it('(d) recordApproval returns 400 APPROVAL_LOCKED after In repair', async () => {
+      const shop = await setupShop('approval_lock@cellivo.lk', 'Lock Shop');
+      const created = await api('post', '/api/repairs', shop.token).send({
+        customer: { name: 'Nimal', phone: '0771234567' },
+        device: { brand: 'Xiaomi', model: 'Redmi Note 10' },
+        faultDescription: 'Charging port',
+      });
+      const tid = created.body.data._id;
+
+      // Move to Diagnosing and record customer approval
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'Diagnosing' });
+      const approveRes = await api('post', `/api/repairs/${tid}/approval`, shop.token).send({
+        decision: 'approved',
+        by: 'in_person',
+      });
+      expect(approveRes.status).toBe(200);
+
+      // Move to In repair (passes approval gate)
+      await api('post', `/api/repairs/${tid}/stage`, shop.token).send({ to: 'In repair' });
+
+      // Attempt to modify approval in In repair stage returns 400 APPROVAL_LOCKED
+      const lockedRes = await api('post', `/api/repairs/${tid}/approval`, shop.token).send({
+        decision: 'declined',
+        by: 'in_person',
+      });
+      expect(lockedRes.status).toBe(400);
+      expect(lockedRes.body.code).toBe('APPROVAL_LOCKED');
     });
   });
 });

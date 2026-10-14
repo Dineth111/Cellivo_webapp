@@ -56,6 +56,28 @@ const STAGE_TRANSITIONS = {
   Cancelled: ['Diagnosing'], // Owner reopen only
 };
 
+function validateRupeeAmount(val, fieldName, { required = false } = {}) {
+  if (val === undefined || val === null || String(val).trim() === '') {
+    if (required) return `${fieldName} is required.`;
+    return null;
+  }
+  const s = String(val).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) {
+    return `${fieldName} must be a valid positive amount with up to 2 decimal places.`;
+  }
+  const num = Number(s);
+  if (isNaN(num) || num < 0) {
+    return `${fieldName} cannot be negative.`;
+  }
+  return null;
+}
+
+function parseRupeeToCents(val) {
+  if (val === undefined || val === null || String(val).trim() === '') return 0;
+  const num = Number(String(val).trim());
+  return isNaN(num) || num < 0 ? 0 : Math.round(num * 100);
+}
+
 export default function RepairTicketDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -253,10 +275,25 @@ export default function RepairTicketDetailPage() {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
+
+    if (advanceDecision === 'keep_fee') {
+      const feeErr = validateRupeeAmount(advanceFeeRs, 'Keep fee amount', { required: true });
+      if (feeErr) {
+        setError(feeErr);
+        return;
+      }
+      const maxFeeCents = ticket.advanceCents || 0;
+      const parsedFeeCents = parseRupeeToCents(advanceFeeRs);
+      if (parsedFeeCents > maxFeeCents) {
+        setError(`Fee cannot exceed advance deposit of Rs ${(maxFeeCents / 100).toFixed(2)}.`);
+        return;
+      }
+    }
+
     setProcessingAdvanceDecision(true);
 
     try {
-      const feeCents = advanceFeeRs ? Math.round(Number(advanceFeeRs) * 100) : 0;
+      const feeCents = advanceDecision === 'keep_fee' ? parseRupeeToCents(advanceFeeRs) : 0;
       await changeRepairStage(id, {
         to: targetAdvanceStage,
         note: cancellationNote.trim() || 'Ticket cancelled with advance settlement',
@@ -305,13 +342,18 @@ export default function RepairTicketDetailPage() {
       setError('Part quantity must be an integer between 1 and 1000.');
       return;
     }
-    const unitPriceCents = partPriceRs ? Math.round(Number(partPriceRs) * 100) : 0;
-    const unitCostCents = partCostRs ? Math.round(Number(partCostRs) * 100) : 0;
-
-    if (unitPriceCents < 0 || unitCostCents < 0) {
-      setError('Price and cost cannot be negative.');
+    const priceErr = validateRupeeAmount(partPriceRs, 'Part selling price');
+    if (priceErr) {
+      setError(priceErr);
       return;
     }
+    const costErr = validateRupeeAmount(partCostRs, 'Part cost price');
+    if (costErr) {
+      setError(costErr);
+      return;
+    }
+    const unitPriceCents = parseRupeeToCents(partPriceRs);
+    const unitCostCents = parseRupeeToCents(partCostRs);
 
     setAddingPart(true);
     setError('');
@@ -360,11 +402,22 @@ export default function RepairTicketDetailPage() {
       setError('Invoice can only be settled when ticket is in "Ready" stage.');
       return;
     }
+    const labourErr = validateRupeeAmount(labourRs, 'Labour charge');
+    if (labourErr) {
+      setError(labourErr);
+      return;
+    }
+    const labourCents = parseRupeeToCents(labourRs);
+    const partsTotal = (ticket.parts || []).reduce((acc, p) => acc + (p.qty || 1) * (p.unitPriceCents || 0), 0);
+    if (labourCents + partsTotal <= 0) {
+      setError('Total repair invoice amount must be greater than Rs 0.00.');
+      return;
+    }
+
     setSettlingInvoice(true);
     setError('');
     setSuccessMsg('');
     try {
-      const labourCents = labourRs ? Math.round(Number(labourRs) * 100) : 0;
       await settleRepairInvoice(id, {
         paymentMethod: invoicePaymentMethod,
         labourCents,
@@ -424,7 +477,7 @@ export default function RepairTicketDetailPage() {
     (sum, p) => sum + (p.qty || 1) * (p.unitPriceCents || 0),
     0
   );
-  const currentLabourCents = labourRs ? Math.round(Number(labourRs) * 100) : ticket.labourCents || 0;
+  const currentLabourCents = labourRs && String(labourRs).trim() !== '' ? parseRupeeToCents(labourRs) : (ticket.labourCents || 0);
   const grandTotalCents = partsTotalCents + currentLabourCents;
   const advanceCents = ticket.advanceSettled ? 0 : ticket.advanceCents || 0;
   const balanceDueCents = grandTotalCents - advanceCents;

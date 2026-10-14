@@ -208,7 +208,11 @@ export async function createTicket({
       session.endSession();
       break;
     } catch (err) {
-      await session.abortTransaction();
+      try {
+        await session.abortTransaction();
+      } catch {
+        // preserve original error
+      }
       session.endSession();
       const isTransient =
         err.errorLabels?.has?.('TransientTransactionError') ||
@@ -412,7 +416,11 @@ export async function changeStage({
       session.endSession();
       break;
     } catch (err) {
-      await session.abortTransaction();
+      try {
+        await session.abortTransaction();
+      } catch {
+        // preserve original error
+      }
       session.endSession();
       const isTransient =
         err.errorLabels?.has?.('TransientTransactionError') ||
@@ -509,6 +517,10 @@ export async function recordApproval({ tenantId, ticketId, decision, by = 'in_pe
     }
     if (ticket.approval?.status === 'waived') {
       throw badRequest('Customer estimate approval has already been waived and cannot be overwritten', 'APPROVAL_ALREADY_WAIVED');
+    }
+    const lockedStages = ['In repair', 'Quality check', 'Ready'];
+    if (lockedStages.includes(ticket.stage)) {
+      throw badRequest(`Cannot modify approval once ticket has reached "${ticket.stage}" stage`, 'APPROVAL_LOCKED');
     }
 
     ticket.approval = {
@@ -687,7 +699,11 @@ export async function settleInvoice({
       session.endSession();
       break;
     } catch (err) {
-      await session.abortTransaction();
+      try {
+        await session.abortTransaction();
+      } catch {
+        // preserve original error
+      }
       session.endSession();
       const isTransient =
         err.errorLabels?.has?.('TransientTransactionError') ||
@@ -717,6 +733,9 @@ export async function setWarranty({ tenantId, ticketId, days, user }) {
     const ticket = await RepairTicket.findById(ticketId);
     if (!ticket) throw notFound('Repair ticket not found');
 
+    if (ticket.warrantyDays !== warrantyDays) {
+      ticket.warrantyAlertSentAt = null;
+    }
     ticket.warrantyDays = warrantyDays;
     if (ticket.deliveredAt && warrantyDays > 0) {
       ticket.warrantyExpiresAt = new Date(ticket.deliveredAt.getTime() + warrantyDays * 24 * 60 * 60 * 1000);

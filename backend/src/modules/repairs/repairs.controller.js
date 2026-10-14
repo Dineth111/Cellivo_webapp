@@ -591,7 +591,7 @@ export async function jobCard(req, res) {
       },
       technician: ticket.technicianId ? { name: ticket.technicianId.name } : null,
       branch: ticket.branchId ? { name: ticket.branchId.name, phone: ticket.branchId.phone } : null,
-      qrPayloadPlaceholder: `http://localhost:3000/status/${ticket.ticketNo}`, // TODO Phase 4: Public status URL
+      qrPayloadPlaceholder: ticket.ticketNo, // TODO Phase 4: Public status URL
       whatsappLink,
     },
   });

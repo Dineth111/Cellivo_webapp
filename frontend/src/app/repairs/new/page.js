@@ -38,6 +38,28 @@ function checkLuhn(imei) {
   return sum % 10 === 0;
 }
 
+function validateRupeeAmount(val, fieldName, { required = false } = {}) {
+  if (val === undefined || val === null || String(val).trim() === '') {
+    if (required) return `${fieldName} is required.`;
+    return null;
+  }
+  const s = String(val).trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) {
+    return `${fieldName} must be a valid positive amount with up to 2 decimal places.`;
+  }
+  const num = Number(s);
+  if (isNaN(num) || num < 0) {
+    return `${fieldName} cannot be negative.`;
+  }
+  return null;
+}
+
+function parseRupeeToCents(val) {
+  if (val === undefined || val === null || String(val).trim() === '') return 0;
+  const num = Number(String(val).trim());
+  return isNaN(num) || num < 0 ? 0 : Math.round(num * 100);
+}
+
 const COMMON_ACCESSORIES = [
   'Charger',
   'Cable',
@@ -219,11 +241,23 @@ export default function NewRepairPage() {
       return;
     }
 
+    // Client-side rupee validation
+    const estimateErr = validateRupeeAmount(estimateRs, 'Estimated repair cost');
+    if (estimateErr) {
+      setError(estimateErr);
+      return;
+    }
+    const advanceErr = validateRupeeAmount(advanceRs, 'Advance deposit');
+    if (advanceErr) {
+      setError(advanceErr);
+      return;
+    }
+
     setSubmitting(true);
 
     try {
-      const estimateCents = estimateRs ? Math.round(Number(estimateRs) * 100) : 0;
-      const advanceCents = advanceRs ? Math.round(Number(advanceRs) * 100) : 0;
+      const estimateCents = parseRupeeToCents(estimateRs);
+      const advanceCents = parseRupeeToCents(advanceRs);
 
       const payload = {
         device: {
