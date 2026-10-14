@@ -56,6 +56,10 @@ export async function postAdvanceDeposit({
  *   Dr Store Credit (advance)
  *   Cr Other Income (4020, total)
  *   Cr Payment Account (advance - total, refund)
+ *
+ * If costCents > 0 (for inventory-managed parts):
+ *   Dr COGS (5010, costCents)
+ *   Cr Inventory (1050, costCents)
  */
 export async function postRepairInvoice({
   tenantId,
@@ -64,6 +68,7 @@ export async function postRepairInvoice({
   totalCents,
   advanceCents = 0,
   paymentMethod = 'cash',
+  costCents = 0,
   createdBy = null,
   session = null,
 }) {
@@ -103,6 +108,15 @@ export async function postRepairInvoice({
       { accountCode: '2020', debit: advance, credit: 0, description: `Deposit applied to repair ${ticketNo}` },
       { accountCode: '4020', debit: 0, credit: total, description: `Repair income for ${ticketNo}` },
       { accountCode: methodAcc, debit: 0, credit: refundExcess, description: `Excess deposit refund via ${paymentMethod} for repair ${ticketNo}` }
+    );
+  }
+
+  // Cost of Goods Sold for inventory-managed parts (mirrors pos.postSale)
+  if (costCents > 0) {
+    const cost = round(costCents);
+    lines.push(
+      { accountCode: '5010', debit: cost, credit: 0, description: `COGS for repair ${ticketNo}` },
+      { accountCode: '1050', debit: 0, credit: cost, description: `Inventory reduction for repair ${ticketNo}` }
     );
   }
 
@@ -189,8 +203,44 @@ export async function postAdvanceCancellation({
   });
 }
 
+/**
+ * Posts write-off entry for remaining inventory-managed repair parts
+ * when a ticket is Cancelled or Unrepairable.
+ *
+ * Dr Cost of Goods Sold (5010)
+ * Cr Inventory Reduction (1050)
+ */
+export async function postRepairPartWriteOff({
+  tenantId,
+  branchId,
+  ticketNo,
+  costCents,
+  createdBy = null,
+  session = null,
+}) {
+  const cost = round(costCents);
+  if (cost <= 0) return null;
+
+  const lines = [
+    { accountCode: '5010', debit: cost, credit: 0, description: `Repair parts written off for ${ticketNo}` },
+    { accountCode: '1050', debit: 0, credit: cost, description: `Inventory reduction for repair ${ticketNo}` },
+  ];
+
+  return await ledgerService.postJournal({
+    tenantId,
+    branchId,
+    referenceType: 'manual',
+    referenceId: ticketNo,
+    description: `Repair parts write-off for ${ticketNo}`,
+    lines,
+    createdBy,
+    session,
+  });
+}
+
 export default {
   postAdvanceDeposit,
   postRepairInvoice,
   postAdvanceCancellation,
+  postRepairPartWriteOff,
 };

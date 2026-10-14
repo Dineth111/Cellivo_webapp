@@ -92,7 +92,7 @@ export async function create(req, res) {
     action: 'repair.created',
     entity: 'RepairTicket',
     entityId: result.ticket._id,
-    after: { ticketNo: result.ticket.ticketNo, customerId: result.customer._id, stage: result.ticket.stage },
+    after: { ticketNo: result.ticket.ticketNo, customerId: result.customer?._id || null, stage: result.ticket.stage },
     tenantId: req.auth.tenantId,
     userId: req.auth.userId,
   });
@@ -568,11 +568,13 @@ export async function jobCard(req, res) {
       createdAt: ticket.createdAt,
       promisedDate: ticket.promisedDate,
       stage: ticket.stage,
-      customer: {
-        name: ticket.customerId?.name,
-        phone: ticket.customerId?.phone,
-        email: ticket.customerId?.email,
-      },
+      customer: ticket.customerId
+        ? {
+            name: ticket.customerId.name,
+            phone: ticket.customerId.phone,
+            email: ticket.customerId.email,
+          }
+        : null,
       device: ticket.device,
       faultDescription: ticket.faultDescription,
       accessories: ticket.accessories,
@@ -591,6 +593,38 @@ export async function jobCard(req, res) {
   });
 }
 
+export async function searchParts(req, res) {
+  const { ticketId, q } = req.query;
+  const searchStr = String(q || '').trim();
+  if (searchStr.length > 100) {
+    throw badRequest('Search query too long (max 100 chars)');
+  }
+
+  let branchId = null;
+  if (ticketId) {
+    requireId(ticketId, 'ticketId');
+    const ticket = await resolveRecordBranch(req, RepairTicket, ticketId, 'Repair ticket');
+    branchId = ticket.branchId;
+  } else if (req.query.branchId) {
+    const branch = await resolveBranch(req, { branchId: req.query.branchId });
+    branchId = branch._id;
+  } else if (!hasSpecial(req.auth.role, 'view_all_branches')) {
+    branchId = req.auth.branchIds?.[0];
+  } else {
+    const branch = await resolveBranch(req);
+    branchId = branch._id;
+  }
+
+  const results = await repairsService.searchParts({
+    tenantId: req.auth.tenantId,
+    branchId,
+    query: searchStr,
+    role: req.auth.role,
+  });
+
+  res.json({ data: results });
+}
+
 export default {
   create,
   list,
@@ -607,4 +641,5 @@ export default {
   invoice,
   warranty,
   jobCard,
+  searchParts,
 };

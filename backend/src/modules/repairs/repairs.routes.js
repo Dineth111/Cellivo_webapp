@@ -15,6 +15,7 @@ router.get('/config', requirePermission('repairs.view'), wrap(c.config));
 router.get('/board', requirePermission('repairs.view'), wrap(c.board));
 router.get('/overdue', requirePermission('repairs.view'), wrap(c.overdue));
 router.get('/technicians/workload', requirePermission('repairs.view'), wrap(c.techniciansWorkload));
+router.get('/parts/search', requirePermission('repairs.edit'), wrap(c.searchParts));
 
 // 2. Ticket ID routes
 router.get('/:id/jobcard', requirePermission('repairs.view'), wrap(c.jobCard));

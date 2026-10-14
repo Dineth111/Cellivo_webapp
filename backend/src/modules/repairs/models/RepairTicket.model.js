@@ -3,6 +3,8 @@ import tenantPlugin from '../../../core/tenantPlugin.js';
 
 const repairPartSchema = new mongoose.Schema(
   {
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
+    inventoryManaged: { type: Boolean, default: false },
     name: { type: String, required: true, trim: true },
     sku: { type: String, default: null, trim: true },
     qty: { type: Number, required: true, min: 1, default: 1 },
@@ -30,7 +32,9 @@ const repairTicketSchema = new mongoose.Schema(
   {
     ticketNo: { type: String, required: true, trim: true },
     branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true, index: true },
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', required: true, index: true },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null, index: true },
+    shopOwnedUnit: { type: Boolean, default: false, index: true },
+    serialUnitId: { type: mongoose.Schema.Types.ObjectId, ref: 'SerialUnit', default: null },
     device: {
       brand: { type: String, required: true, trim: true },
       model: { type: String, required: true, trim: true },
@@ -77,7 +81,7 @@ const repairTicketSchema = new mongoose.Schema(
     },
     technicianId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     approval: {
-      status: { type: String, enum: ['none', 'pending', 'approved', 'declined', 'waived'], default: 'none' },
+      status: { type: String, enum: ['none', 'pending', 'approved', 'declined', 'waived', 'not_applicable'], default: 'none' },
       at: { type: Date, default: null },
       by: { type: String, enum: ['in_person', 'status_link', null], default: null },
       recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -87,6 +91,7 @@ const repairTicketSchema = new mongoose.Schema(
     parts: { type: [repairPartSchema], default: [] },
     labourCents: { type: Number, default: 0, min: 0 },
     partsCostCents: { type: Number, default: 0, min: 0 },
+    cogsPostedCents: { type: Number, default: 0, min: 0 },
     isInvoiceSettled: { type: Boolean, default: false },
     invoiceId: { type: String, default: null },
     invoiceSettledAt: { type: Date, default: null },

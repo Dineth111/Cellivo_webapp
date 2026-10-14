@@ -8,10 +8,18 @@ import { normalizePhone, phoneVariants } from '../../customers/utils/phone.js';
 import { encryptPasscode, decryptPasscode, hasPasscodeKey } from '../utils/passcode.js';
 import { validateImei } from '../utils/imei.js';
 import { reservePart, releasePart } from '../adapters/stock.adapter.js';
-import { postAdvanceDeposit, postRepairInvoice, postAdvanceCancellation } from '../adapters/ledger.adapter.js';
+import {
+  postAdvanceDeposit,
+  postRepairInvoice,
+  postAdvanceCancellation,
+  postRepairPartWriteOff,
+} from '../adapters/ledger.adapter.js';
 import { PAYMENT_ACCOUNTS } from '../../pos/services/ledger.service.js';
+import * as stockService from '../../inventory/services/stock.service.js';
+import * as imeiService from '../../inventory/services/imei.service.js';
+import SerialUnit from '../../inventory/models/SerialUnit.model.js';
 import * as notificationsService from '../../notifications/services/notifications.service.js';
-import { runWithContext, runAsPlatform } from '../../../core/tenantContext.js';
+import { runWithContext, runAsPlatform, getContext } from '../../../core/tenantContext.js';
 import { badRequest, notFound, forbidden, conflict } from '../../../core/errors.js';
 import { escapeRegex, requireId, pick } from '../../../core/validate.js';
 import { hasPermission, hasSpecial } from '../../../core/permissions.js';
@@ -46,9 +54,18 @@ export const STAGE_TRANSITIONS = {
   Cancelled: ['Diagnosing'], // Owner reopen only
 };
 
+function isTransient(err) {
+  return (
+    err?.errorLabels?.has?.('TransientTransactionError') ||
+    err?.errorLabelSet?.has?.('TransientTransactionError') ||
+    (Array.isArray(err?.errorLabels) && err.errorLabels.includes('TransientTransactionError')) ||
+    err?.code === 112
+  );
+}
+
 /**
- * Creates a repair ticket with atomic sequence numbering, customer lookup/creation,
- * passcode encryption, and advance payment posting.
+ * Creates a repair ticket with atomic sequence numbering, customer lookup/creation (or shop-owned unit),
+ * passcode encryption, advance payment posting, and shop-owned device status transition to in_repair.
  */
 export async function createTicket({
   tenantId,
@@ -94,7 +111,12 @@ export async function createTicket({
   if (!device || !device.brand || !device.model) {
     throw badRequest('Device brand and model are required');
   }
-  if (typeof device.brand !== 'string' || device.brand.trim().length > 100 || typeof device.model !== 'string' || device.model.trim().length > 100) {
+  if (
+    typeof device.brand !== 'string' ||
+    device.brand.trim().length > 100 ||
+    typeof device.model !== 'string' ||
+    device.model.trim().length > 100
+  ) {
     throw badRequest('Device brand and model must not exceed 100 characters', 'INVALID_DEVICE');
   }
   if (device.imei && (typeof device.imei !== 'string' || device.imei.trim().length > 50)) {
@@ -108,9 +130,9 @@ export async function createTicket({
   }
 
   // Validate IMEI if provided
-  if (device.imei) {
-    const imeiTrimmed = String(device.imei).trim();
-    if (!validateImei(imeiTrimmed)) {
+  const cleanedImei = device.imei ? String(device.imei).trim() : null;
+  if (cleanedImei) {
+    if (!validateImei(cleanedImei)) {
       throw badRequest('Invalid IMEI number (failed Luhn checksum)', 'INVALID_IMEI');
     }
   }
@@ -158,6 +180,56 @@ export async function createTicket({
     parsedPromisedDate = d;
   }
 
+  // Check shop-owned unit & active repair before transaction
+  let isShopOwned = false;
+  let preCheckUnit = null;
+
+  if (cleanedImei) {
+    const activeTicket = await runWithContext({ tenantId }, async () => {
+      return await RepairTicket.findOne({
+        tenantId,
+        'device.imei': cleanedImei,
+        stage: { $nin: TERMINAL_STAGES },
+      }).lean();
+    });
+    if (activeTicket) {
+      throw badRequest(`Device with IMEI ${cleanedImei} is already in repair (ticket ${activeTicket.ticketNo})`, 'DEVICE_ALREADY_IN_REPAIR');
+    }
+
+    preCheckUnit = await runWithContext({ tenantId }, async () => {
+      return await SerialUnit.findOne({
+        tenantId,
+        branchId,
+        $or: [{ imei1: cleanedImei }, { imei2: cleanedImei }],
+      }).lean();
+    });
+
+    if (preCheckUnit) {
+      if (preCheckUnit.status === 'in_repair') {
+        throw badRequest(`Device with IMEI ${cleanedImei} is already in repair`, 'DEVICE_ALREADY_IN_REPAIR');
+      }
+      if (['in_stock', 'reserved'].includes(preCheckUnit.status)) {
+        isShopOwned = true;
+      }
+    }
+  }
+
+  // Permission and requirements validation:
+  if (isShopOwned) {
+    const userRole = user?.role || getContext()?.role;
+    if (!hasPermission(userRole, 'repairs.create') || !hasPermission(userRole, 'inventory.edit')) {
+      throw forbidden('Creating a shop-owned repair ticket requires repairs.create and inventory.edit permissions');
+    }
+    if (advanceCents && Number(advanceCents) > 0) {
+      throw badRequest('Shop-owned repairs cannot have an advance payment', 'ADVANCE_NOT_ALLOWED');
+    }
+  } else {
+    // If not shop owned: customer is required!
+    if (!customerId && !customerData) {
+      throw badRequest('Customer is required for customer repair tickets', 'CUSTOMER_REQUIRED');
+    }
+  }
+
   let resolvedCustomer = null;
   let createdTicket = null;
   let passcodeWarning = null;
@@ -170,36 +242,60 @@ export async function createTicket({
 
     try {
       await runWithContext({ tenantId }, async () => {
-        // 1. Resolve or create customer
-        if (customerId) {
-          resolvedCustomer = await Customer.findById(customerId).session(session);
-          if (!resolvedCustomer) throw notFound('Customer not found');
-        } else if (customerData) {
-          const rawPhone = customerData.phone || '';
-          const normalized = normalizePhone(rawPhone);
-          if (!normalized) {
-            throw badRequest('A valid phone number is required for the customer');
-          }
-
-          const variants = phoneVariants(rawPhone);
-          resolvedCustomer = await Customer.findOne({
-            phone: { $in: variants },
-            isArchived: false,
+        // Re-check under transaction lock
+        if (cleanedImei) {
+          const activeTicket = await RepairTicket.findOne({
+            tenantId,
+            'device.imei': cleanedImei,
+            stage: { $nin: TERMINAL_STAGES },
           }).session(session);
-
-          if (!resolvedCustomer) {
-            const newCust = new Customer({
-              name: customerData.name?.trim() || 'Walk-in Customer',
-              phone: normalized,
-              email: customerData.email?.trim() || '',
-              address: typeof customerData.address === 'string' ? customerData.address.trim() : '',
-              marketingOptIn: Boolean(customerData.marketingOptIn),
-              createdBy: user._id,
-            });
-            resolvedCustomer = await newCust.save({ session });
+          if (activeTicket) {
+            throw badRequest(`Device with IMEI ${cleanedImei} is already in repair (ticket ${activeTicket.ticketNo})`, 'DEVICE_ALREADY_IN_REPAIR');
           }
-        } else {
-          throw badRequest('Customer ID or customer details are required');
+
+          if (isShopOwned) {
+            const unit = await SerialUnit.findOne({
+              tenantId,
+              branchId,
+              $or: [{ imei1: cleanedImei }, { imei2: cleanedImei }],
+            }).session(session);
+
+            if (!unit || !['in_stock', 'reserved'].includes(unit.status)) {
+              throw badRequest(`Device with IMEI ${cleanedImei} is already in repair`, 'DEVICE_ALREADY_IN_REPAIR');
+            }
+          }
+        }
+
+        // 1. Resolve or create customer (for non-shop-owned tickets)
+        if (!isShopOwned) {
+          if (customerId) {
+            resolvedCustomer = await Customer.findById(customerId).session(session);
+            if (!resolvedCustomer) throw notFound('Customer not found');
+          } else if (customerData) {
+            const rawPhone = customerData.phone || '';
+            const normalized = normalizePhone(rawPhone);
+            if (!normalized) {
+              throw badRequest('A valid phone number is required for the customer');
+            }
+
+            const variants = phoneVariants(rawPhone);
+            resolvedCustomer = await Customer.findOne({
+              phone: { $in: variants },
+              isArchived: false,
+            }).session(session);
+
+            if (!resolvedCustomer) {
+              const newCust = new Customer({
+                name: customerData.name?.trim() || 'Walk-in Customer',
+                phone: normalized,
+                email: customerData.email?.trim() || '',
+                address: typeof customerData.address === 'string' ? customerData.address.trim() : '',
+                marketingOptIn: Boolean(customerData.marketingOptIn),
+                createdBy: user._id,
+              });
+              resolvedCustomer = await newCust.save({ session });
+            }
+          }
         }
 
         // 2. Validate technician if supplied
@@ -208,16 +304,35 @@ export async function createTicket({
             _id: technicianId,
             isActive: true,
             branchIds: branchId,
-          }).populate('roleId').session(session);
+          })
+            .populate('roleId')
+            .session(session);
           if (!tech || !hasPermission(tech.roleId, 'repairs.edit')) {
             throw badRequest('Technician must be an active user assigned to this branch with repairs.edit permission', 'INVALID_TECHNICIAN');
           }
         }
 
-        // 3. Generate atomic ticket number
-        const ticketNo = await RepairSequence.getNextNumber(tenantId, branchId, 'JOB-', session);
+        // 3. Generate atomic ticket number (tenant-scoped)
+        const ticketNo = await RepairSequence.getNextNumber(tenantId, null, 'JOB-', session);
 
-        // 4. Encrypt passcode if provided
+        // 4. Shop-owned device transition to in_repair
+        let serialUnitId = null;
+        if (isShopOwned && cleanedImei) {
+          const transitioned = await imeiService.transitionStatus({
+            tenantId,
+            imei: cleanedImei,
+            newStatus: 'in_repair',
+            branchId,
+            userId: user._id,
+            reason: `Repair intake ticket ${ticketNo}`,
+            session,
+          });
+          serialUnitId = transitioned?._id || null;
+        } else if (cleanedImei && preCheckUnit) {
+          serialUnitId = preCheckUnit._id;
+        }
+
+        // 5. Encrypt passcode if provided
         let passcodeEncrypted = null;
         if (passcode) {
           if (!hasPasscodeKey()) {
@@ -227,8 +342,8 @@ export async function createTicket({
           }
         }
 
-        // 5. Post advance journal if advance > 0
-        const advCents = advanceCents || 0;
+        // 6. Post advance journal if advance > 0 (customer tickets only)
+        const advCents = (!isShopOwned && advanceCents) ? advanceCents : 0;
         if (advCents > 0) {
           await postAdvanceDeposit({
             tenantId,
@@ -241,15 +356,17 @@ export async function createTicket({
           });
         }
 
-        // 6. Create ticket document
+        // 7. Create ticket document
         createdTicket = new RepairTicket({
           ticketNo,
           branchId,
-          customerId: resolvedCustomer._id,
+          customerId: isShopOwned ? null : resolvedCustomer?._id,
+          shopOwnedUnit: isShopOwned,
+          serialUnitId,
           device: {
             brand: device.brand.trim(),
             model: device.model.trim(),
-            imei: device.imei ? String(device.imei).trim() : null,
+            imei: cleanedImei,
             serial: device.serial ? String(device.serial).trim() : null,
             colour: device.colour ? String(device.colour).trim() : null,
           },
@@ -265,13 +382,14 @@ export async function createTicket({
           promisedDate: parsedPromisedDate,
           stage: 'Received',
           technicianId: technicianId || null,
+          approval: isShopOwned ? { status: 'not_applicable', at: new Date() } : { status: 'none' },
           history: [
             {
               from: 'None',
               to: 'Received',
               at: new Date(),
               userId: user._id,
-              note: 'Ticket created at intake',
+              note: isShopOwned ? 'Shop-owned ticket created at intake' : 'Ticket created at intake',
             },
           ],
           internalNotes: internalNotes ? String(internalNotes).trim() : '',
@@ -291,12 +409,7 @@ export async function createTicket({
         // preserve original error
       }
       session.endSession();
-      const isTransient =
-        err.errorLabels?.has?.('TransientTransactionError') ||
-        err.errorLabelSet?.has?.('TransientTransactionError') ||
-        (Array.isArray(err.errorLabels) && err.errorLabels.includes('TransientTransactionError')) ||
-        err.code === 112;
-      if (isTransient && attempts < 5) {
+      if (isTransient(err) && attempts < 5) {
         await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
         continue;
       }
@@ -304,8 +417,8 @@ export async function createTicket({
     }
   }
 
-  // 7. Post-commit notification (non-blocking)
-  if (resolvedCustomer && resolvedCustomer.phone) {
+  // 8. Post-commit notification (customer tickets only)
+  if (!isShopOwned && resolvedCustomer && resolvedCustomer.phone) {
     try {
       const tenantDoc = await runAsPlatform(async () => Tenant.findById(tenantId).select('name').lean());
       const shopName = tenantDoc?.name || 'Cellivo Shop';
@@ -448,14 +561,15 @@ export async function updateTicket({ tenantId, ticketId, data = {}, user }) {
 }
 
 /**
- * Transitions ticket stage according to the state machine rules.
+ * Changes repair ticket stage with transition validation, shop-owned IMEI status updates,
+ * COGS/parts write-off on cancellation, and optional notification.
  */
 export async function changeStage({
   tenantId,
   ticketId,
   to,
   note = '',
-  advanceDecision = null,
+  advanceDecision = 'none',
   feeCents = 0,
   paymentMethod = null,
   waiveApproval = false,
@@ -508,27 +622,33 @@ export async function changeStage({
           isReopen = true;
         }
 
-        // 4. Approval gate for In repair (from any stage, including Waiting parts)
+        // 4. Approval gate for In repair
         if (to === 'In repair') {
-          const isApproved = ticket.approval?.status === 'approved' || ticket.approval?.status === 'waived';
-          if (!isApproved) {
-            const canApprove = user.role?.key === 'owner' || hasPermission(user.role, 'repairs.approve');
-            if (waiveApproval && canApprove) {
-              ticket.approval.status = 'waived';
-              ticket.approval.waivedBy = user._id;
-              ticket.approval.waivedAt = new Date();
-            } else {
-              throw badRequest(
-                'Cannot move to In repair without customer approval or approval waiver by an authorized user',
-                'APPROVAL_REQUIRED'
-              );
+          if (ticket.shopOwnedUnit) {
+            // Shop-owned tickets: skip customer approval gate
+            ticket.approval = { status: 'not_applicable', at: new Date() };
+          } else {
+            const isApproved = ticket.approval?.status === 'approved' || ticket.approval?.status === 'waived';
+            if (!isApproved) {
+              const canApprove = user.role?.key === 'owner' || hasPermission(user.role, 'repairs.approve');
+              if (waiveApproval && canApprove) {
+                ticket.approval.status = 'waived';
+                ticket.approval.waivedBy = user._id;
+                ticket.approval.waivedAt = new Date();
+              } else {
+                throw badRequest(
+                  'Cannot move to In repair without customer approval or approval waiver by an authorized user',
+                  'APPROVAL_REQUIRED'
+                );
+              }
             }
           }
         }
 
-        // 5. Moving to Delivered requires settled invoice and sets deliveredAt & warrantyExpiresAt
+        // 5. Moving to Delivered
         if (to === 'Delivered') {
-          if (!ticket.isInvoiceSettled) {
+          // Shop-owned units close without customer invoice
+          if (!ticket.shopOwnedUnit && !ticket.isInvoiceSettled) {
             throw badRequest(
               'Cannot mark ticket as Delivered until the invoice has been settled',
               'INVOICE_NOT_SETTLED'
@@ -551,8 +671,72 @@ export async function changeStage({
           }
         }
 
-        // 7. Advance handling on Cancelled or Unrepairable
-        if (['Cancelled', 'Unrepairable'].includes(to) && ticket.advanceCents > 0 && !ticket.advanceSettled) {
+        // 7. Shop-owned unit IMEI status lifecycle transitions
+        if (ticket.shopOwnedUnit && ticket.device?.imei) {
+          const cleanedImei = ticket.device.imei.trim();
+
+          if (isReopen) {
+            // Reopening a shop-owned ticket: check unit status
+            const unit = await SerialUnit.findOne({
+              branchId: ticket.branchId,
+              $or: [{ imei1: cleanedImei }, { imei2: cleanedImei }],
+            }).session(session);
+
+            if (!unit) {
+              throw notFound(`Serial unit for IMEI ${cleanedImei} not found`);
+            }
+            if (unit.status === 'in_stock') {
+              await imeiService.transitionStatus({
+                tenantId,
+                imei: cleanedImei,
+                newStatus: 'in_repair',
+                branchId: ticket.branchId,
+                userId: user._id,
+                reason: `Reopened repair ticket ${ticket.ticketNo}`,
+                session,
+              });
+            } else if (unit.status === 'in_repair') {
+              // already in_repair -> do nothing
+            } else {
+              throw badRequest(
+                `Cannot reopen shop repair: unit status is '${unit.status}', expected 'in_stock' or 'in_repair'`,
+                'CANNOT_REOPEN_UNIT_STATUS'
+              );
+            }
+          } else if (to === 'Ready') {
+            await imeiService.transitionStatus({
+              tenantId,
+              imei: cleanedImei,
+              newStatus: 'in_stock',
+              branchId: ticket.branchId,
+              userId: user._id,
+              reason: `Repair ready ticket ${ticket.ticketNo}`,
+              session,
+            });
+          } else if (to === 'Cancelled' || to === 'Delivered') {
+            const unit = await SerialUnit.findOne({
+              branchId: ticket.branchId,
+              $or: [{ imei1: cleanedImei }, { imei2: cleanedImei }],
+            }).session(session);
+
+            if (unit && unit.status === 'in_repair') {
+              await imeiService.transitionStatus({
+                tenantId,
+                imei: cleanedImei,
+                newStatus: 'in_stock',
+                branchId: ticket.branchId,
+                userId: user._id,
+                reason: `Repair ${to.toLowerCase()} ticket ${ticket.ticketNo}`,
+                session,
+              });
+            }
+          } else if (to === 'Unrepairable') {
+            // Leave unit in in_repair; do not transition back to stock
+          }
+        }
+
+        // 8. Advance handling on Cancelled or Unrepairable (customer tickets only)
+        if (['Cancelled', 'Unrepairable'].includes(to) && !ticket.shopOwnedUnit && ticket.advanceCents > 0 && !ticket.advanceSettled) {
           const canApprove = user.role?.key === 'owner' || hasPermission(user.role, 'repairs.approve');
           if (!canApprove) {
             throw forbidden('Handling advance settlement on cancelled/unrepairable tickets requires approval permission', 'APPROVAL_REQUIRED');
@@ -580,7 +764,26 @@ export async function changeStage({
           ticket.advanceFeeCents = fee;
         }
 
-        // 8. Update ticket stage and append history
+        // 9. Parts write-off on Cancelled or Unrepairable (for customer tickets)
+        if (['Cancelled', 'Unrepairable'].includes(to) && !ticket.shopOwnedUnit) {
+          const invCost = ticket.parts
+            .filter((p) => p.inventoryManaged)
+            .reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
+          const deltaCogs = Math.max(0, invCost - (ticket.cogsPostedCents || 0));
+          if (deltaCogs > 0) {
+            await postRepairPartWriteOff({
+              tenantId,
+              branchId: ticket.branchId,
+              ticketNo: ticket.ticketNo,
+              costCents: deltaCogs,
+              createdBy: user._id,
+              session,
+            });
+            ticket.cogsPostedCents = (ticket.cogsPostedCents || 0) + deltaCogs;
+          }
+        }
+
+        // 10. Update ticket stage and append history
         ticket.stage = to;
         ticket.history.push({
           from: currentStage,
@@ -593,11 +796,13 @@ export async function changeStage({
         await ticket.save({ session });
         updatedTicket = ticket;
 
-        // Fetch customer for notification
-        const cust = await Customer.findById(ticket.customerId).session(session).lean();
-        if (cust) {
-          customerPhone = cust.phone;
-          customerName = cust.name;
+        // Fetch customer for notification (customer tickets only)
+        if (!ticket.shopOwnedUnit && ticket.customerId) {
+          const cust = await Customer.findById(ticket.customerId).session(session).lean();
+          if (cust) {
+            customerPhone = cust.phone;
+            customerName = cust.name;
+          }
         }
       });
 
@@ -611,12 +816,7 @@ export async function changeStage({
         // preserve original error
       }
       session.endSession();
-      const isTransient =
-        err.errorLabels?.has?.('TransientTransactionError') ||
-        err.errorLabelSet?.has?.('TransientTransactionError') ||
-        (Array.isArray(err.errorLabels) && err.errorLabels.includes('TransientTransactionError')) ||
-        err.code === 112;
-      if (isTransient && attempts < 3) {
+      if (isTransient(err) && attempts < 3) {
         await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
         continue;
       }
@@ -624,8 +824,8 @@ export async function changeStage({
     }
   }
 
-  // 9. Post-commit notification (do not send on reopen)
-  if (!isReopen && customerPhone) {
+  // 11. Post-commit notification (non-blocking, customer tickets only, not on reopen)
+  if (!isReopen && !updatedTicket.shopOwnedUnit && customerPhone) {
     try {
       const tenantDoc = await runAsPlatform(async () => Tenant.findById(tenantId).select('name').lean());
       const shopName = tenantDoc?.name || 'Cellivo Shop';
@@ -698,6 +898,9 @@ export async function recordApproval({ tenantId, ticketId, decision, by = 'in_pe
     const ticket = await RepairTicket.findById(ticketId);
     if (!ticket) throw notFound('Repair ticket not found');
 
+    if (ticket.shopOwnedUnit) {
+      throw badRequest('Customer approval is not applicable to shop-owned repair tickets', 'NOT_APPLICABLE');
+    }
     if (ticket.isInvoiceSettled) {
       throw badRequest('Cannot record approval after invoice has been settled', 'INVOICE_SETTLED');
     }
@@ -735,78 +938,169 @@ export async function recordApproval({ tenantId, ticketId, decision, by = 'in_pe
 }
 
 /**
- * Adds a part to the repair ticket.
+ * Adds a part to the repair ticket and decrements inventory if managed.
+ * Retries up to 3 times on TransientTransactionError with a new session for each attempt.
  */
 export async function addPart({ tenantId, ticketId, partData, user }) {
-  return await runWithContext({ tenantId }, async () => {
-    const ticket = await RepairTicket.findById(ticketId);
-    if (!ticket) throw notFound('Repair ticket not found');
+  let attempts = 0;
+  let updatedTicket = null;
 
-    if (ticket.isInvoiceSettled) {
-      throw badRequest('Cannot add parts after invoice has been settled', 'INVOICE_SETTLED');
-    }
-    if (TERMINAL_STAGES.includes(ticket.stage)) {
-      throw badRequest(`Cannot add parts when ticket is in terminal stage "${ticket.stage}"`, 'TERMINAL_STAGE');
-    }
-    if (ticket.parts && ticket.parts.length >= 50) {
-      throw badRequest('Cannot add more than 50 parts to a repair ticket', 'MAX_PARTS_EXCEEDED');
-    }
+  while (attempts < 3) {
+    attempts++;
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    const qty = partData.qty !== undefined ? partData.qty : 1;
-    if (!Number.isInteger(qty) || qty < 1 || qty > 1000) {
-      throw badRequest('Part quantity must be an integer between 1 and 1000', 'INVALID_PART_QTY');
-    }
-    const unitCostCents = partData.unitCostCents !== undefined ? partData.unitCostCents : 0;
-    if (!Number.isInteger(unitCostCents) || unitCostCents < 0 || unitCostCents > 100_000_000) {
-      throw badRequest('Part unit cost must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_COST');
-    }
-    const unitPriceCents = partData.unitPriceCents !== undefined ? partData.unitPriceCents : 0;
-    if (!Number.isInteger(unitPriceCents) || unitPriceCents < 0 || unitPriceCents > 100_000_000) {
-      throw badRequest('Part unit price must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_PRICE');
-    }
+    try {
+      await runWithContext({ tenantId }, async () => {
+        const ticket = await RepairTicket.findById(ticketId).session(session);
+        if (!ticket) throw notFound('Repair ticket not found');
 
-    const reserved = await reservePart({
-      ...partData,
-      qty,
-      unitCostCents,
-      unitPriceCents,
-      addedBy: user._id,
-    });
-    ticket.parts.push(reserved);
+        if (ticket.isInvoiceSettled) {
+          throw badRequest('Cannot add parts after invoice has been settled', 'INVOICE_SETTLED');
+        }
+        if (TERMINAL_STAGES.includes(ticket.stage)) {
+          throw badRequest(`Cannot add parts when ticket is in terminal stage "${ticket.stage}"`, 'TERMINAL_STAGE');
+        }
+        if (ticket.parts && ticket.parts.length >= 50) {
+          throw badRequest('Cannot add more than 50 parts to a repair ticket', 'MAX_PARTS_EXCEEDED');
+        }
 
-    // Update total parts cost
-    ticket.partsCostCents = ticket.parts.reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
+        // Shop-owned ticket: block part changes once unit is back in stock (Ready or Delivered)
+        if (ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) {
+          throw badRequest('Cannot add parts once shop-owned unit is back in stock', 'PART_LOCKED');
+        }
 
-    await ticket.save();
-    return ticket;
-  });
+        const qty = partData.qty !== undefined ? partData.qty : 1;
+        if (!Number.isInteger(qty) || qty < 1 || qty > 1000) {
+          throw badRequest('Part quantity must be an integer between 1 and 1000', 'INVALID_PART_QTY');
+        }
+        if (partData.unitCostCents !== undefined && partData.unitCostCents !== null) {
+          if (!Number.isInteger(partData.unitCostCents) || partData.unitCostCents < 0 || partData.unitCostCents > 100_000_000) {
+            throw badRequest('Part unit cost must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_COST');
+          }
+        }
+        if (partData.unitPriceCents !== undefined && partData.unitPriceCents !== null) {
+          if (!Number.isInteger(partData.unitPriceCents) || partData.unitPriceCents < 0 || partData.unitPriceCents > 100_000_000) {
+            throw badRequest('Part unit price must be an integer between 0 and 100,000,000 cents', 'INVALID_PART_PRICE');
+          }
+        }
+
+        const reserved = await reservePart({
+          tenantId,
+          branchId: ticket.branchId,
+          ticketNo: ticket.ticketNo,
+          ...partData,
+          qty,
+          addedBy: user._id,
+          session,
+        });
+
+        ticket.parts.push(reserved);
+        ticket.partsCostCents = ticket.parts.reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
+
+        await ticket.save({ session });
+        updatedTicket = ticket;
+      });
+
+      await session.commitTransaction();
+      session.endSession();
+      break;
+    } catch (err) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // preserve original error
+      }
+      session.endSession();
+      if (isTransient(err) && attempts < 3) {
+        await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return updatedTicket;
 }
 
 /**
- * Removes a part from the repair ticket.
+ * Removes a part from the repair ticket and restores inventory stock if managed.
+ * Retries up to 3 times on TransientTransactionError with a new session for each attempt.
  */
 export async function removePart({ tenantId, ticketId, partId, user }) {
-  return await runWithContext({ tenantId }, async () => {
-    const ticket = await RepairTicket.findById(ticketId);
-    if (!ticket) throw notFound('Repair ticket not found');
+  let attempts = 0;
+  let updatedTicket = null;
 
-    if (ticket.isInvoiceSettled) {
-      throw badRequest('Cannot remove parts after invoice has been settled', 'INVOICE_SETTLED');
+  while (attempts < 3) {
+    attempts++;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      await runWithContext({ tenantId }, async () => {
+        const ticket = await RepairTicket.findById(ticketId).session(session);
+        if (!ticket) throw notFound('Repair ticket not found');
+
+        if (ticket.isInvoiceSettled) {
+          throw badRequest('Cannot remove parts after invoice has been settled', 'INVOICE_SETTLED');
+        }
+        if (TERMINAL_STAGES.includes(ticket.stage)) {
+          throw badRequest(`Cannot remove parts when ticket is in terminal stage "${ticket.stage}"`, 'TERMINAL_STAGE');
+        }
+
+        // Block removal if COGS has already been posted
+        if (ticket.cogsPostedCents > 0) {
+          throw badRequest('Cannot remove parts after cost has been recognised', 'COGS_ALREADY_POSTED');
+        }
+
+        // Shop-owned ticket: block part changes once unit is back in stock (Ready or Delivered)
+        if (ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) {
+          throw badRequest('Cannot remove parts once shop-owned unit is back in stock', 'PART_LOCKED');
+        }
+
+        const part = ticket.parts.id(partId);
+        if (!part) throw notFound('Part not found on ticket');
+
+        await releasePart({
+          tenantId,
+          branchId: ticket.branchId,
+          ticketNo: ticket.ticketNo,
+          part,
+          userId: user._id,
+          session,
+        });
+
+        part.deleteOne();
+        ticket.partsCostCents = ticket.parts.reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
+
+        await ticket.save({ session });
+        updatedTicket = ticket;
+      });
+
+      await session.commitTransaction();
+      session.endSession();
+      break;
+    } catch (err) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        // preserve original error
+      }
+      session.endSession();
+      if (isTransient(err) && attempts < 3) {
+        await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
+        continue;
+      }
+      throw err;
     }
-    if (TERMINAL_STAGES.includes(ticket.stage)) {
-      throw badRequest(`Cannot remove parts when ticket is in terminal stage "${ticket.stage}"`, 'TERMINAL_STAGE');
-    }
+  }
 
-    await releasePart({ ticket, partId });
-    ticket.partsCostCents = ticket.parts.reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
-
-    await ticket.save();
-    return ticket;
-  });
+  return updatedTicket;
 }
 
 /**
  * Settles invoice for a repair ticket (idempotent, balanced double-entry).
+ * Posts Dr 5010 / Cr 1050 for delta COGS of inventory-managed parts.
  */
 export async function settleInvoice({
   tenantId,
@@ -827,6 +1121,10 @@ export async function settleInvoice({
       await runWithContext({ tenantId }, async () => {
         const ticket = await RepairTicket.findById(ticketId).session(session);
         if (!ticket) throw notFound('Repair ticket not found');
+
+        if (ticket.shopOwnedUnit) {
+          throw badRequest('Shop-owned repair tickets cannot be invoiced to a customer', 'SHOP_OWNED_CANNOT_INVOICE');
+        }
 
         if (ticket.isInvoiceSettled) {
           throw badRequest('Invoice is already settled for this repair ticket', 'ALREADY_INVOICED');
@@ -858,10 +1156,16 @@ export async function settleInvoice({
           throw badRequest('Total repair amount must be greater than 0 to generate invoice');
         }
 
+        // Calculate delta COGS for inventory-managed parts
+        const invCost = ticket.parts
+          .filter((p) => p.inventoryManaged)
+          .reduce((sum, p) => sum + (p.qty || 1) * (p.unitCostCents || 0), 0);
+        const deltaCogs = Math.max(0, invCost - (ticket.cogsPostedCents || 0));
+
         // Held advance = ticket.advanceSettled ? 0 : ticket.advanceCents
         const effectiveAdvance = ticket.advanceSettled ? 0 : (ticket.advanceCents || 0);
 
-        // Post journal inside transaction
+        // Post journal inside transaction (including COGS if deltaCogs > 0)
         await postRepairInvoice({
           tenantId,
           branchId: ticket.branchId,
@@ -869,6 +1173,7 @@ export async function settleInvoice({
           totalCents,
           advanceCents: effectiveAdvance,
           paymentMethod,
+          costCents: deltaCogs,
           createdBy: user._id,
           session,
         });
@@ -878,6 +1183,7 @@ export async function settleInvoice({
         ticket.invoiceSettledAt = new Date();
         ticket.invoiceTotalCents = totalCents;
         ticket.advanceSettled = true;
+        ticket.cogsPostedCents = (ticket.cogsPostedCents || 0) + deltaCogs;
 
         ticket.history.push({
           from: ticket.stage,
@@ -901,12 +1207,7 @@ export async function settleInvoice({
         // preserve original error
       }
       session.endSession();
-      const isTransient =
-        err.errorLabels?.has?.('TransientTransactionError') ||
-        err.errorLabelSet?.has?.('TransientTransactionError') ||
-        (Array.isArray(err.errorLabels) && err.errorLabels.includes('TransientTransactionError')) ||
-        err.code === 112;
-      if (isTransient && attempts < 3) {
+      if (isTransient(err) && attempts < 3) {
         await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
         continue;
       }
@@ -915,6 +1216,32 @@ export async function settleInvoice({
   }
 
   return updatedTicket;
+}
+
+/**
+ * Searches inventory products for parts addition on a repair ticket.
+ * Masks averageCostCents unless caller has view_cost_margin permission.
+ */
+export async function searchParts({ tenantId, branchId, query, role }) {
+  return await runWithContext({ tenantId }, async () => {
+    const products = await stockService.searchProducts(tenantId, branchId, query, 50);
+    const canViewMargins = hasSpecial(role, 'view_cost_margin');
+    return products.map((p) => {
+      const item = {
+        _id: p._id,
+        productId: p._id,
+        name: p.name,
+        sku: p.sku || null,
+        barcode: p.barcode || null,
+        sellingPriceCents: p.sellingPriceCents || 0,
+        qty: p.qty || 0,
+      };
+      if (canViewMargins) {
+        item.averageCostCents = p.averageCostCents || 0;
+      }
+      return item;
+    });
+  });
 }
 
 /**
@@ -928,6 +1255,10 @@ export async function setWarranty({ tenantId, ticketId, days, user }) {
   return await runWithContext({ tenantId }, async () => {
     const ticket = await RepairTicket.findById(ticketId);
     if (!ticket) throw notFound('Repair ticket not found');
+
+    if (ticket.shopOwnedUnit) {
+      return ticket;
+    }
 
     if (ticket.warrantyDays !== warrantyDays) {
       ticket.warrantyAlertSentAt = null;
@@ -954,7 +1285,7 @@ export async function setWarranty({ tenantId, ticketId, days, user }) {
 
 /**
  * Checks for repair tickets whose warranty is expiring soon (within 24 hours).
- * Skips tickets already alerted (warrantyAlertSentAt != null).
+ * Skips tickets already alerted (warrantyAlertSentAt != null) and shop-owned tickets.
  * Sets warrantyAlertSentAt only after notify() succeeds.
  */
 export async function checkWarrantyExpiry(tenantId) {
@@ -965,6 +1296,7 @@ export async function checkWarrantyExpiry(tenantId) {
     const expiring = await RepairTicket.find({
       warrantyExpiresAt: { $gte: now, $lte: nextDay },
       warrantyAlertSentAt: null,
+      shopOwnedUnit: false,
       isArchived: false,
     }).populate('customerId', 'name phone');
 
@@ -1056,6 +1388,7 @@ export default {
   addPart,
   removePart,
   settleInvoice,
+  searchParts,
   setWarranty,
   checkWarrantyExpiry,
   getTechniciansWorkload,

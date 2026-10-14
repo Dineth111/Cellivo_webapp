@@ -105,9 +105,23 @@ This document tracks cross-module questions, architectural assumptions, and revi
 50. **Ledger accounts and referenceType request.**
    Note that 4040 (repair income) and referenceType 'repair' were preserved in the ledger and did not collide with other modules.
 
-51. **Inventory integration (with Dev 4).**
-   Note that Dev 4's stock service now exists, and `stock.adapter.js` can call Dev 4's inventory service directly in a Phase 4 follow-up.
-   Repair invoices do NOT post COGS (`5010`) or Inventory reduction (`1050`) until then. `partsCostCents` is stored on the ticket for store profit calculation (visible only with `view_cost_margin`).
+51. **Inventory integration & COGS posting (For Dev 3).**
+   Repair invoices (`settleInvoice`) and part write-offs (`Cancelled` / `Unrepairable`) now post Dr `5010` (COGS) / Cr `1050` (Inventory reduction) for inventory-managed repair parts, matching POS behavior in `ledger.service.postSale`. The journal remains balanced and idempotent (tracking `cogsPostedCents`).
+   Shop-owned repair tickets generate no customer invoice and no ledger entries.
+
+### For Dev 4
+
+55. **Serialised parts in repairs.**
+   Serialised parts currently remain free-text on repair tickets. Dev 4 should advise whether a dedicated serial unit status (e.g. `used_in_repair` or `consumed_repair`) should be added to `SerialUnit`, or whether transitioning to `written_off` (with ticket reference) or `sold` is acceptable for serialised parts consumed in repairs.
+
+56. **Serial unit valuation after repair.**
+   When parts are consumed to repair a shop-owned serial unit, the serial unit's stored `unitCostCents` is not currently incremented with the replacement parts' cost. Dev 4 should advise if parts cost should be capitalised into the serial unit's inventory valuation upon return to stock.
+
+57. **Dedicated stock movement type for repairs.**
+   Repair parts currently use `StockMovement` type `adjustment_loss` (decrement) and `adjustment_gain` (restoration) with `referenceType: 'repair'`. Dev 4 should consider adding a dedicated `repair_part` type to `MOVEMENT_TYPES` on `StockMovement` for clearer audit trails.
+
+58. **Shop-owned devices and sellable stock.**
+   Transitioning a shop-owned unit to `in_repair` at intake decrements sellable stock level by 1 via `adjustStockLevel` (`adjustment_loss`), and returning to `in_stock` at `Ready` or `Delivered` restores it by 1 (`adjustment_gain`).
 
 ### For Dev 1
 
