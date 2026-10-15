@@ -9,32 +9,26 @@ export async function getDashboard(req, res) {
   const validPeriods = ['today', 'this_week', 'this_month'];
   const sanitizedPeriod = validPeriods.includes(period) ? period : 'today';
 
-  // Branch isolation
-  const branchFilter = {};
+  // Branch scoping:
+  // If user has view_all_branches, allow filtering by specific branch or viewing all
+  // Otherwise, strictly limit to user's first assigned branch
+  let branchId = null;
   if (req.query.branchId) {
     if (hasSpecial(req.auth.role, 'view_all_branches')) {
       const branch = await resolveBranch(req, { branchId: req.query.branchId });
-      branchFilter.branchId = branch._id;
+      branchId = branch._id;
     } else {
-      // Force user's assigned branch
-      const userBranch = req.auth.branchIds?.[0];
-      if (userBranch) {
-        branchFilter.branchId = userBranch;
-      }
+      branchId = req.auth.branchIds?.[0] || null;
     }
   } else if (!hasSpecial(req.auth.role, 'view_all_branches')) {
-    if (req.auth.branchIds?.length) {
-      branchFilter.branchId = { $in: req.auth.branchIds };
-    }
+    branchId = req.auth.branchIds?.[0] || null;
   }
-
-  const allowCostMargin = hasSpecial(req.auth.role, 'view_cost_margin');
 
   const data = await getDashboardData({
     tenantId: req.auth.tenantId,
-    branchFilter,
+    branchId,
     period: sanitizedPeriod,
-    allowCostMargin,
+    role: req.auth.role,
   });
 
   res.json({ data });
