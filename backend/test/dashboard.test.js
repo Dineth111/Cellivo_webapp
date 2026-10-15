@@ -561,4 +561,276 @@ describe('F-05 Dashboard API', () => {
     expect(found.daysOverdue).toBeGreaterThanOrEqual(2);
     expect(found.stage).toBe('Diagnosing');
   });
+
+  it('9. user without view_all_branches and no assigned branch gets 403', async () => {
+    const owner = await signup('nobranch_dash@cellivo.lk', 'No Branch Shop');
+    const tenantId = owner.user.tenant?._id;
+
+    let noBranchToken;
+    await runWithContext({ tenantId }, async () => {
+      const role = new Role({
+        tenantId,
+        name: 'Branch Staff',
+        key: 'staff_nobranch',
+        grid: { dashboard: { view: true }, pos: { view: true } },
+        special: { view_all_branches: false },
+      });
+      await role.save();
+
+      const user = new User({
+        tenantId,
+        branchIds: [],
+        name: 'Zero Branch User',
+        email: 'zerobranch@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: role._id,
+        isActive: true,
+      });
+      await User.collection.insertOne(user.toObject());
+      noBranchToken = (await createSession(user)).token;
+    });
+
+    const res = await api('get', '/api/dashboard', noBranchToken);
+    expect(res.status).toBe(403);
+    expect(res.body.message || res.body.error).toMatch(/branch/i);
+  });
+
+  it('10. branch-limited user requesting another branch gets 403', async () => {
+    const owner = await signup('wrongbranch_dash@cellivo.lk', 'Wrong Branch Shop');
+    const tenantId = owner.user.tenant?._id;
+
+    await runAsPlatform(async () => {
+      await Tenant.findByIdAndUpdate(tenantId, { branchLimitOverride: 5 });
+    });
+
+    const b1Res = await api('get', '/api/branches', owner.token);
+    const b1 = b1Res.body.data[0]._id;
+
+    const b2Res = await api('post', '/api/branches', owner.token).send({
+      name: 'Second Branch',
+      invoicePrefix: 'B2-',
+    });
+    expect(b2Res.status).toBe(201);
+    const b2 = b2Res.body.data._id;
+
+    let b1OnlyToken;
+    await runWithContext({ tenantId }, async () => {
+      const role = new Role({
+        tenantId,
+        name: 'Single Branch Staff',
+        key: 'staff_single',
+        grid: { dashboard: { view: true }, pos: { view: true } },
+        special: { view_all_branches: false },
+      });
+      await role.save();
+
+      const user = new User({
+        tenantId,
+        branchIds: [b1],
+        name: 'B1 Only User',
+        email: 'b1only@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: role._id,
+        isActive: true,
+      });
+      await user.save();
+      b1OnlyToken = (await createSession(user)).token;
+    });
+
+    const res = await api('get', `/api/dashboard?branchId=${b2}`, b1OnlyToken);
+    expect(res.status).toBe(403);
+    expect(res.body.message || res.body.error).toMatch(/forbidden/i);
+  });
+
+  it('11. multi-branch user can select any of their assigned branches', async () => {
+    const owner = await signup('multibranch_dash@cellivo.lk', 'Multi Branch Shop');
+    const tenantId = owner.user.tenant?._id;
+
+    await runAsPlatform(async () => {
+      await Tenant.findByIdAndUpdate(tenantId, { branchLimitOverride: 5 });
+    });
+
+    const b1Res = await api('get', '/api/branches', owner.token);
+    const b1 = b1Res.body.data[0]._id;
+
+    const b2Res = await api('post', '/api/branches', owner.token).send({
+      name: 'Branch Two',
+      invoicePrefix: 'B2-',
+    });
+    expect(b2Res.status).toBe(201);
+    const b2 = b2Res.body.data._id;
+
+    // Create sales in each branch
+    let multiToken;
+    await runWithContext({ tenantId }, async () => {
+      const inv1 = new Invoice({
+        tenantId,
+        branchId: b1,
+        invoiceNumber: 'INV-B1-01',
+        status: 'completed',
+        paymentStatus: 'paid',
+        grandTotalCents: 50000,
+        subtotalCents: 50000,
+        totalPaidCents: 50000,
+        lines: [{ name: 'Item 1', qty: 1, unitPriceCents: 50000, grossCents: 50000, netCents: 50000, lineTotalCents: 50000 }],
+      });
+      await inv1.save();
+
+      const inv2 = new Invoice({
+        tenantId,
+        branchId: b2,
+        invoiceNumber: 'INV-B2-01',
+        status: 'completed',
+        paymentStatus: 'paid',
+        grandTotalCents: 80000,
+        subtotalCents: 80000,
+        totalPaidCents: 80000,
+        lines: [{ name: 'Item 2', qty: 1, unitPriceCents: 80000, grossCents: 80000, netCents: 80000, lineTotalCents: 80000 }],
+      });
+      await inv2.save();
+
+      const role = new Role({
+        tenantId,
+        name: 'Multi Branch Staff Role',
+        key: 'staff_multi',
+        grid: { dashboard: { view: true }, pos: { view: true } },
+        special: { view_all_branches: false },
+      });
+      await role.save();
+
+      const user = new User({
+        tenantId,
+        branchIds: [b1, b2],
+        name: 'Multi Branch User',
+        email: 'user_multi@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: role._id,
+        isActive: true,
+      });
+      await user.save();
+      multiToken = (await createSession(user)).token;
+    });
+
+    // Select b1
+    const resB1 = await api('get', `/api/dashboard?branchId=${b1}`, multiToken);
+    expect(resB1.status).toBe(200);
+    expect(resB1.body.data.sales.totalCents).toBe(50000);
+
+    // Select b2
+    const resB2 = await api('get', `/api/dashboard?branchId=${b2}`, multiToken);
+    expect(resB2.status).toBe(200);
+    expect(resB2.body.data.sales.totalCents).toBe(80000);
+  });
+
+  it('12. held and draft invoices are excluded from receivables calculation', async () => {
+    const owner = await signup('receivables_status@cellivo.lk', 'Receivables Status Shop');
+    const tenantId = owner.user.tenant?._id;
+    const branchId = (await api('get', '/api/branches', owner.token)).body.data[0]._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // Completed, unpaid invoice -> MUST be included in receivables
+      const invCompleted = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-REC-COMPLETED',
+        status: 'completed',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 75000,
+        subtotalCents: 75000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Screen', qty: 1, unitPriceCents: 75000, grossCents: 75000, netCents: 75000, lineTotalCents: 75000 }],
+      });
+      await invCompleted.save();
+
+      // Draft invoice, unpaid -> MUST NOT be included
+      const invDraft = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-REC-DRAFT',
+        status: 'draft',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 45000,
+        subtotalCents: 45000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Cable', qty: 1, unitPriceCents: 45000, grossCents: 45000, netCents: 45000, lineTotalCents: 45000 }],
+      });
+      await invDraft.save();
+
+      // Voided invoice, unpaid -> MUST NOT be included
+      const invVoided = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-REC-VOIDED',
+        status: 'voided',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 90000,
+        subtotalCents: 90000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Battery', qty: 1, unitPriceCents: 90000, grossCents: 90000, netCents: 90000, lineTotalCents: 90000 }],
+      });
+      await invVoided.save();
+    });
+
+    const res = await api('get', '/api/dashboard', owner.token);
+    expect(res.status).toBe(200);
+    expect(res.body.data.receivables.totalCents).toBe(75000);
+    expect(res.body.data.receivables.count).toBe(1);
+  });
+
+  it('13. non-stock-tracked products are excluded from low stock calculation', async () => {
+    const owner = await signup('lowstock_track@cellivo.lk', 'Track Stock Shop');
+    const tenantId = owner.user.tenant?._id;
+    const branchId = (await api('get', '/api/branches', owner.token)).body.data[0]._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // 1. Stock-tracked product, qty=1, reorderLevel=5 -> LOW STOCK (count + 1)
+      const p1 = new Product({
+        tenantId,
+        name: 'Tracked Screen',
+        barcode: 'BAR-SCREEN-01',
+        sellingPriceCents: 20000,
+        reorderLevel: 5,
+        trackStock: true,
+      });
+      await p1.save();
+
+      const sl1 = new StockLevel({
+        tenantId,
+        branchId,
+        productId: p1._id,
+        qty: 1,
+        averageCostCents: 10000,
+      });
+      await sl1.save();
+
+      // 2. Non-stock-tracked product (e.g. Labour / Service), qty=0, reorderLevel=10 -> MUST BE EXCLUDED
+      const p2Id = new (await import('mongoose')).default.Types.ObjectId();
+      await Product.collection.insertOne({
+        _id: p2Id,
+        tenantId,
+        name: 'Screen Replacement Service',
+        barcode: 'BAR-SERVICE-01',
+        sellingPriceCents: 50000,
+        reorderLevel: 10,
+        trackStock: false,
+        isArchived: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const sl2 = new StockLevel({
+        tenantId,
+        branchId,
+        productId: p2Id,
+        qty: 0,
+        averageCostCents: 0,
+      });
+      await sl2.save();
+    });
+
+    const res = await api('get', '/api/dashboard', owner.token);
+    expect(res.status).toBe(200);
+    // Only p1 is counted in low stock
+    expect(res.body.data.lowStockCount).toBe(1);
+  });
 });

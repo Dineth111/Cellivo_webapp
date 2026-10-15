@@ -29,6 +29,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const [warningMsg, setWarningMsg] = useState('');
   const [branches, setBranches] = useState([]);
   const [branchId, setBranchId] = useState('');
 
@@ -79,6 +80,7 @@ export default function ReportsPage() {
   const handleExportCsv = async () => {
     setExporting(true);
     setError('');
+    setWarningMsg('');
     try {
       const params = {};
       if (branchId) params.branchId = branchId;
@@ -88,6 +90,11 @@ export default function ReportsPage() {
       }
 
       const blob = await exportReportCsv(reportType, params);
+      if (blob.isTruncated) {
+        setWarningMsg(
+          `Notice: Export reached maximum limit of 5,000 rows (total records: ${blob.totalCount ? blob.totalCount.toLocaleString() : '5,000+'}).`
+        );
+      }
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -155,6 +162,12 @@ export default function ReportsPage() {
         {error && (
           <Alert tone="danger" style={{ marginBottom: '1rem' }}>
             {error}
+          </Alert>
+        )}
+
+        {warningMsg && (
+          <Alert tone="warning" style={{ marginBottom: '1rem' }}>
+            {warningMsg}
           </Alert>
         )}
 

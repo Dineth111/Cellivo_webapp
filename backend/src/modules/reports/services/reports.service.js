@@ -10,6 +10,28 @@ import { badRequest } from '../../../core/errors.js';
 import { parseColomboDateRange } from '../utils/dateUtils.js';
 import { buildCsv } from '../utils/csvUtils.js';
 
+export const REPAIR_STAGES = [
+  'Received',
+  'Diagnosing',
+  'Waiting approval',
+  'Waiting parts',
+  'In repair',
+  'Quality check',
+  'Ready',
+  'Delivered',
+  'Unrepairable',
+  'Cancelled',
+];
+
+export const ACTIVE_REPAIR_STAGES = [
+  'Received',
+  'Diagnosing',
+  'Waiting approval',
+  'Waiting parts',
+  'In repair',
+  'Quality check',
+];
+
 const parsePagination = (query) => {
   let page = parseInt(query.page, 10);
   let limit = parseInt(query.limit, 10);
@@ -22,8 +44,17 @@ const parsePagination = (query) => {
   return { page, limit, skip };
 };
 
+function validateBranchId(branchId) {
+  if (branchId !== undefined && branchId !== null && branchId !== '') {
+    if (!mongoose.isValidObjectId(String(branchId))) {
+      throw badRequest('Invalid branchId', 'INVALID_BRANCH_ID');
+    }
+  }
+}
+
 /**
  * 1. Sales Report
+ * Only completed, partially_returned, returned invoices.
  */
 export async function getSalesReport({
   tenantId,
@@ -33,6 +64,7 @@ export async function getSalesReport({
   query = {},
   viewCostMargin = false,
 }) {
+  validateBranchId(branchId);
   const tId = new mongoose.Types.ObjectId(tenantId);
   const bId = branchId ? new mongoose.Types.ObjectId(branchId) : null;
   const { start, end } = parseColomboDateRange(startDate, endDate);
@@ -40,7 +72,7 @@ export async function getSalesReport({
 
   const matchFilter = {
     tenantId: tId,
-    status: { $ne: 'voided' },
+    status: { $in: ['completed', 'partially_returned', 'returned'] },
     createdAt: { $gte: start, $lte: end },
   };
   if (bId) matchFilter.branchId = bId;
@@ -213,6 +245,9 @@ export async function getSalesReport({
 
 /**
  * 2. Inventory Valuation & Stock Report
+ * Only products that track stock (trackStock !== false).
+ * totalCostValue = sum over each stock level of (qty * averageCostCents).
+ * isLowStock uses dashboard rule: (p.reorderLevel > 0 && totalQty <= p.reorderLevel).
  */
 export async function getInventoryReport({
   tenantId,
@@ -220,6 +255,7 @@ export async function getInventoryReport({
   query = {},
   viewCostMargin = false,
 }) {
+  validateBranchId(branchId);
   const tId = new mongoose.Types.ObjectId(tenantId);
   const bId = branchId ? new mongoose.Types.ObjectId(branchId) : null;
   const { page, limit, skip } = parsePagination(query);
@@ -227,9 +263,9 @@ export async function getInventoryReport({
   const matchFilter = {
     tenantId: tId,
     isArchived: false,
+    trackStock: { $ne: false },
   };
 
-  // Aggregation pipeline starting with tenantId match on Product
   const pipeline = [
     { $match: matchFilter },
     {
@@ -255,11 +291,24 @@ export async function getInventoryReport({
     {
       $addFields: {
         totalQtyOnHand: { $sum: '$stockLevels.qty' },
-        avgCostCents: {
+        totalCostValueCents: {
           $cond: [
             { $gt: [{ $size: '$stockLevels' }, 0] },
-            { $avg: '$stockLevels.averageCostCents' },
-            { $ifNull: ['$costPriceCents', 0] },
+            {
+              $sum: {
+                $map: {
+                  input: '$stockLevels',
+                  as: 'sl',
+                  in: {
+                    $multiply: [
+                      { $ifNull: ['$$sl.qty', 0] },
+                      { $ifNull: ['$$sl.averageCostCents', 0] },
+                    ],
+                  },
+                },
+              },
+            },
+            0,
           ],
         },
       },
@@ -267,7 +316,19 @@ export async function getInventoryReport({
     {
       $addFields: {
         totalRetailValueCents: { $multiply: ['$totalQtyOnHand', '$sellingPriceCents'] },
-        totalCostValueCents: { $multiply: ['$totalQtyOnHand', '$avgCostCents'] },
+        avgCostCents: {
+          $cond: [
+            { $gt: ['$totalQtyOnHand', 0] },
+            { $divide: ['$totalCostValueCents', '$totalQtyOnHand'] },
+            {
+              $cond: [
+                { $gt: [{ $size: '$stockLevels' }, 0] },
+                { $avg: '$stockLevels.averageCostCents' },
+                { $ifNull: ['$costPriceCents', 0] },
+              ],
+            },
+          ],
+        },
       },
     },
   ];
@@ -326,7 +387,7 @@ export async function getInventoryReport({
     totalRetailValueCents: p.totalRetailValueCents || 0,
     averageCostCents: viewCostMargin ? Math.round(p.avgCostCents || 0) : null,
     totalCostValueCents: viewCostMargin ? Math.round(p.totalCostValueCents || 0) : null,
-    isLowStock: (p.totalQtyOnHand || 0) <= (p.reorderLevel || 0),
+    isLowStock: Boolean(p.reorderLevel > 0 && (p.totalQtyOnHand || 0) <= p.reorderLevel),
   }));
 
   return {
@@ -346,6 +407,11 @@ export async function getInventoryReport({
 
 /**
  * 3. Repairs Report
+ * Uses real technician field: technicianId.
+ * Validates stage against allowed enum (rejects non-strings/objects with 400).
+ * Validates technicianId as ObjectId (400 on invalid).
+ * Revenue & profit count ONLY invoiced/delivered tickets (isInvoiceSettled), never Cancelled, Unrepairable or shop-owned.
+ * Active stages: Received, Diagnosing, Waiting approval, Waiting parts, In repair, Quality check.
  */
 export async function getRepairsReport({
   tenantId,
@@ -355,6 +421,7 @@ export async function getRepairsReport({
   query = {},
   viewCostMargin = false,
 }) {
+  validateBranchId(branchId);
   const tId = new mongoose.Types.ObjectId(tenantId);
   const bId = branchId ? new mongoose.Types.ObjectId(branchId) : null;
   const { start, end } = parseColomboDateRange(startDate, endDate);
@@ -366,8 +433,20 @@ export async function getRepairsReport({
     createdAt: { $gte: start, $lte: end },
   };
   if (bId) matchFilter.branchId = bId;
-  if (query.stage) matchFilter.stage = query.stage;
-  if (query.technicianId) matchFilter.assignedTechnicianId = new mongoose.Types.ObjectId(query.technicianId);
+
+  if (query.stage !== undefined) {
+    if (typeof query.stage !== 'string' || !REPAIR_STAGES.includes(query.stage)) {
+      throw badRequest('Invalid repair stage', 'INVALID_STAGE');
+    }
+    matchFilter.stage = query.stage;
+  }
+
+  if (query.technicianId !== undefined) {
+    if (typeof query.technicianId !== 'string' || !mongoose.isValidObjectId(query.technicianId)) {
+      throw badRequest('Invalid technicianId', 'INVALID_TECHNICIAN_ID');
+    }
+    matchFilter.technicianId = new mongoose.Types.ObjectId(query.technicianId);
+  }
 
   const repairsPipeline = [
     { $match: matchFilter },
@@ -397,17 +476,34 @@ export async function getRepairsReport({
     },
   ];
 
-  // Summary aggregation
+  // Revenue & profit condition: isInvoiceSettled === true, not shopOwnedUnit, customerId != null, stage not Cancelled/Unrepairable
+  const isSettledRevenueTicket = {
+    $and: [
+      { $eq: ['$isInvoiceSettled', true] },
+      { $ne: ['$shopOwnedUnit', true] },
+      { $ne: ['$customerId', null] },
+      { $not: [{ $in: ['$stage', ['Cancelled', 'Unrepairable']] }] },
+    ],
+  };
+
   const summaryAgg = await RepairTicket.aggregate([
     ...repairsPipeline,
     {
       $group: {
         _id: null,
         totalTickets: { $sum: 1 },
-        totalLabourCents: { $sum: { $ifNull: ['$labourCents', 0] } },
-        totalPartsSellingCents: { $sum: '$ticketPartsSellingCents' },
-        totalPartsCostCents: { $sum: { $ifNull: ['$partsCostCents', 0] } },
-        totalGrandTotalCents: { $sum: '$ticketTotalCents' },
+        totalLabourCents: {
+          $sum: { $cond: [isSettledRevenueTicket, { $ifNull: ['$labourCents', 0] }, 0] },
+        },
+        totalPartsSellingCents: {
+          $sum: { $cond: [isSettledRevenueTicket, '$ticketPartsSellingCents', 0] },
+        },
+        totalPartsCostCents: {
+          $sum: { $cond: [isSettledRevenueTicket, { $ifNull: ['$partsCostCents', 0] }, 0] },
+        },
+        totalGrandTotalCents: {
+          $sum: { $cond: [isSettledRevenueTicket, '$ticketTotalCents', 0] },
+        },
         deliveredCount: {
           $sum: { $cond: [{ $eq: ['$stage', 'Delivered'] }, 1, 0] },
         },
@@ -416,11 +512,7 @@ export async function getRepairsReport({
         },
         activeCount: {
           $sum: {
-            $cond: [
-              { $in: ['$stage', ['Received', 'Diagnostic', 'In repair', 'Quality check', 'Ready']] },
-              1,
-              0,
-            ],
+            $cond: [{ $in: ['$stage', ACTIVE_REPAIR_STAGES] }, 1, 0],
           },
         },
       },
@@ -457,7 +549,7 @@ export async function getRepairsReport({
     {
       $lookup: {
         from: 'users',
-        localField: 'assignedTechnicianId',
+        localField: 'technicianId',
         foreignField: '_id',
         as: 'techDoc',
       },
@@ -477,6 +569,9 @@ export async function getRepairsReport({
         advanceCents: { $ifNull: ['$advanceCents', 0] },
         paymentStatus: 1,
         isInvoiceSettled: 1,
+        shopOwnedUnit: 1,
+        customerId: 1,
+        technicianId: 1,
         customerName: { $ifNull: [{ $arrayElemAt: ['$customerDoc.name', 0] }, 'Shop-Owned Unit'] },
         technicianName: { $ifNull: [{ $arrayElemAt: ['$techDoc.name', 0] }, 'Unassigned'] },
       },
@@ -491,6 +586,7 @@ export async function getRepairsReport({
     stage: t.stage,
     device: `${t.device?.brand || ''} ${t.device?.model || ''}`.trim(),
     customerName: t.customerName,
+    technicianId: t.technicianId,
     technicianName: t.technicianName,
     labourCents: t.labourCents,
     partsSellingCents: t.partsSellingCents,
@@ -522,19 +618,21 @@ export async function getRepairsReport({
 
 /**
  * 4. Receivables Report
+ * Only completed, partially_returned invoices (same rule as dashboard).
  */
 export async function getReceivablesReport({
   tenantId,
   branchId,
   query = {},
 }) {
+  validateBranchId(branchId);
   const tId = new mongoose.Types.ObjectId(tenantId);
   const bId = branchId ? new mongoose.Types.ObjectId(branchId) : null;
   const { page, limit, skip } = parsePagination(query);
 
   const matchFilter = {
     tenantId: tId,
-    status: { $ne: 'voided' },
+    status: { $in: ['completed', 'partially_returned'] },
     paymentStatus: { $in: ['unpaid', 'partially_paid', 'overdue'] },
   };
   if (bId) matchFilter.branchId = bId;
@@ -665,6 +763,8 @@ export async function getReceivablesReport({
 
 /**
  * 5. Export Report CSV
+ * Loops pages up to 5000 rows. If more exist, sets isTruncated = true.
+ * Amounts have numeric: true so negative values (e.g. -12.50) are not prefixed with an apostrophe.
  */
 export async function exportReportCsv({
   type,
@@ -675,19 +775,34 @@ export async function exportReportCsv({
   query = {},
   viewCostMargin = false,
 }) {
-  // Export up to 5000 rows (unpaginated for CSV)
-  const exportQuery = { ...query, page: 1, limit: 200 };
+  const MAX_EXPORT = 5000;
+  const PAGE_SIZE = 200;
+  let allRows = [];
+  let page = 1;
+  let totalCount = 0;
+
+  const fetchPage = async (p, l) => {
+    const q = { ...query, page: p, limit: l };
+    if (type === 'sales') return getSalesReport({ tenantId, branchId, startDate, endDate, query: q, viewCostMargin });
+    if (type === 'inventory') return getInventoryReport({ tenantId, branchId, query: q, viewCostMargin });
+    if (type === 'repairs') return getRepairsReport({ tenantId, branchId, startDate, endDate, query: q, viewCostMargin });
+    if (type === 'receivables') return getReceivablesReport({ tenantId, branchId, query: q });
+    throw badRequest(`Unknown report type: ${type}`, 'INVALID_REPORT_TYPE');
+  };
+
+  while (allRows.length < MAX_EXPORT) {
+    const fetchLimit = Math.min(PAGE_SIZE, MAX_EXPORT - allRows.length);
+    const result = await fetchPage(page, fetchLimit);
+    totalCount = result.pagination.totalCount;
+    if (!result.data || result.data.length === 0) break;
+    allRows.push(...result.data);
+    if (allRows.length >= totalCount || result.data.length < fetchLimit) break;
+    page++;
+  }
+
+  const isTruncated = totalCount > MAX_EXPORT;
 
   if (type === 'sales') {
-    const report = await getSalesReport({
-      tenantId,
-      branchId,
-      startDate,
-      endDate,
-      query: exportQuery,
-      viewCostMargin,
-    });
-
     const columns = [
       { key: 'invoiceNumber', label: 'Invoice No' },
       {
@@ -700,17 +815,20 @@ export async function exportReportCsv({
       {
         key: 'grandTotalCents',
         label: 'Total (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'totalPaidCents',
         label: 'Paid (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'balanceDueCents',
         label: 'Balance (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       { key: 'paymentStatus', label: 'Payment Status' },
       { key: 'status', label: 'Status' },
@@ -721,44 +839,43 @@ export async function exportReportCsv({
         {
           key: 'costCents',
           label: 'Cost (Rs)',
+          numeric: true,
           format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
         },
         {
           key: 'profitCents',
           label: 'Profit (Rs)',
+          numeric: true,
           format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
         }
       );
     }
 
     return {
-      csv: buildCsv(columns, report.data),
+      csv: buildCsv(columns, allRows),
       filename: `sales_report_${new Date().toISOString().slice(0, 10)}.csv`,
+      isTruncated,
+      totalCount,
     };
   }
 
   if (type === 'inventory') {
-    const report = await getInventoryReport({
-      tenantId,
-      branchId,
-      query: exportQuery,
-      viewCostMargin,
-    });
-
     const columns = [
       { key: 'name', label: 'Product Name' },
       { key: 'barcode', label: 'Barcode' },
       { key: 'sku', label: 'SKU' },
-      { key: 'qtyOnHand', label: 'Qty on Hand' },
+      { key: 'qtyOnHand', label: 'Qty on Hand', numeric: true },
       {
         key: 'sellingPriceCents',
         label: 'Retail Price (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'totalRetailValueCents',
         label: 'Total Retail Value (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
     ];
 
@@ -767,32 +884,27 @@ export async function exportReportCsv({
         {
           key: 'averageCostCents',
           label: 'Average Cost (Rs)',
+          numeric: true,
           format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
         },
         {
           key: 'totalCostValueCents',
           label: 'Total Cost Value (Rs)',
+          numeric: true,
           format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
         }
       );
     }
 
     return {
-      csv: buildCsv(columns, report.data),
+      csv: buildCsv(columns, allRows),
       filename: `inventory_report_${new Date().toISOString().slice(0, 10)}.csv`,
+      isTruncated,
+      totalCount,
     };
   }
 
   if (type === 'repairs') {
-    const report = await getRepairsReport({
-      tenantId,
-      branchId,
-      startDate,
-      endDate,
-      query: exportQuery,
-      viewCostMargin,
-    });
-
     const columns = [
       { key: 'ticketNo', label: 'Ticket No' },
       { key: 'publicCode', label: 'Tracking Code' },
@@ -803,26 +915,31 @@ export async function exportReportCsv({
       },
       { key: 'device', label: 'Device' },
       { key: 'customerName', label: 'Customer' },
+      { key: 'technicianName', label: 'Technician' },
       { key: 'stage', label: 'Stage' },
       {
         key: 'labourCents',
         label: 'Labour (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'partsSellingCents',
         label: 'Parts (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'grandTotalCents',
         label: 'Total (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'advanceCents',
         label: 'Advance (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       { key: 'paymentStatus', label: 'Payment Status' },
     ];
@@ -831,23 +948,20 @@ export async function exportReportCsv({
       columns.push({
         key: 'partsCostCents',
         label: 'Parts Cost (Rs)',
+        numeric: true,
         format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       });
     }
 
     return {
-      csv: buildCsv(columns, report.data),
+      csv: buildCsv(columns, allRows),
       filename: `repairs_report_${new Date().toISOString().slice(0, 10)}.csv`,
+      isTruncated,
+      totalCount,
     };
   }
 
   if (type === 'receivables') {
-    const report = await getReceivablesReport({
-      tenantId,
-      branchId,
-      query: exportQuery,
-    });
-
     const columns = [
       { key: 'invoiceNumber', label: 'Invoice No' },
       {
@@ -860,25 +974,30 @@ export async function exportReportCsv({
       {
         key: 'grandTotalCents',
         label: 'Total (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'totalPaidCents',
         label: 'Paid (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
       {
         key: 'balanceDueCents',
         label: 'Outstanding (Rs)',
-        format: (val) => (val / 100).toFixed(2),
+        numeric: true,
+        format: (val) => (val != null ? (val / 100).toFixed(2) : ''),
       },
-      { key: 'daysOutstanding', label: 'Days Outstanding' },
+      { key: 'daysOutstanding', label: 'Days Outstanding', numeric: true },
       { key: 'paymentStatus', label: 'Status' },
     ];
 
     return {
-      csv: buildCsv(columns, report.data),
+      csv: buildCsv(columns, allRows),
       filename: `receivables_report_${new Date().toISOString().slice(0, 10)}.csv`,
+      isTruncated,
+      totalCount,
     };
   }
 
