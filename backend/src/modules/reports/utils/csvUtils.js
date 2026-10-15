@@ -10,11 +10,13 @@
  */
 export function escapeCsvCell(val) {
   if (val === null || val === undefined) return '';
-  let str = String(val);
 
-  // Formula prefix sanitization
-  if (/^[=+\-@]/.test(str)) {
-    str = `'${str}`;
+  let str;
+  // Formula prefix sanitization applies only to string cells (not numbers; negative numbers stay numbers)
+  if (typeof val === 'string') {
+    str = /^[=+\-@\t\r]/.test(val) ? `'${val}` : val;
+  } else {
+    str = String(val);
   }
 
   // RFC 4180 escaping if contains delimiter, quote, or newline

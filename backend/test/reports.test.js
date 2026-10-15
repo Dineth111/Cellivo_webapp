@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup, addStaff } from './api.js';
-import { runWithContext } from '../src/core/tenantContext.js';
+import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
 import { createSession } from '../src/modules/auth/session.service.js';
 import Invoice from '../src/modules/pos/models/Invoice.model.js';
 import CreditNote from '../src/modules/pos/models/CreditNote.model.js';
@@ -10,6 +10,8 @@ import StockLevel from '../src/modules/inventory/models/StockLevel.model.js';
 import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
 import Role from '../src/modules/roles/Role.model.js';
 import User from '../src/modules/users/User.model.js';
+import Tenant from '../src/modules/tenants/Tenant.model.js';
+import { escapeCsvCell, buildCsv } from '../src/modules/reports/utils/csvUtils.js';
 
 beforeAll(startDb);
 afterAll(stopDb);
@@ -408,10 +410,45 @@ describe('F-17 Reports API', () => {
 
     const csvText = exportRes.text;
 
-    // Check that formula prefixes are escaped with a prepended single quote "'"
+    // Check that formula prefixes on strings are escaped with a prepended single quote "'"
     expect(csvText).toContain("'=cmd|’ /C calc’!A0");
     expect(csvText).toContain("'+94770001122");
     expect(csvText).toContain("'-DISCOUNT-CODE");
+
+    // Test buildCsv with formulas, \t, \r, and negative numbers:
+    // formula and whitespace prefixes get escaped; negative numbers stay numbers (not prepended with single quote)
+    const testCsv = buildCsv(
+      [
+        { key: 'name', label: 'Name' },
+        { key: 'tabbed', label: 'Tab' },
+        { key: 'returned', label: 'CR' },
+        { key: 'negativeInt', label: 'Int' },
+        { key: 'negativeFloat', label: 'Float' },
+      ],
+      [
+        {
+          name: '=formula',
+          tabbed: '\tTabFormula',
+          returned: '\rReturnFormula',
+          negativeInt: -500,
+          negativeFloat: -12.5,
+        },
+      ]
+    );
+    expect(testCsv).toContain("'=formula");
+    expect(testCsv).toContain("'\tTabFormula");
+    expect(testCsv).toContain("'\rReturnFormula");
+    expect(testCsv).toContain(",-500,-12.5");
+    expect(testCsv).not.toContain("'-500");
+    expect(testCsv).not.toContain("'-12.5");
+
+    // Direct unit test of escapeCsvCell: numbers vs strings
+    expect(escapeCsvCell(-500)).toBe('-500');
+    expect(escapeCsvCell(-12.5)).toBe('-12.5');
+    expect(escapeCsvCell('=-500')).toBe("'=-500");
+    expect(escapeCsvCell('\tfoo')).toBe("'\tfoo");
+    expect(escapeCsvCell('\rbar')).toBe("\"'\rbar\"");
+    expect(escapeCsvCell('@admin')).toBe("'@admin");
 
     // Staff without export_reports -> 403
     let noExportToken;
@@ -525,5 +562,125 @@ describe('F-17 Reports API', () => {
     expect(arRes.body.data.summary.totalInvoices).toBe(0);
     expect(arRes.body.data.summary.totalReceivablesCents).toBe(0);
     expect(arRes.body.data.data).toEqual([]);
+  });
+
+  it('10. enforces fail-closed branch scoping for branch-limited users', async () => {
+    const owner = await signup('reports_branches@cellivo.lk', 'Branch Reports Shop');
+    const tenantId = owner.user.tenant?._id;
+
+    await runAsPlatform(async () => {
+      await Tenant.findByIdAndUpdate(tenantId, { branchLimitOverride: 5 });
+    });
+
+    const b1 = (await api('get', '/api/branches', owner.token)).body.data[0]._id;
+    const b2Res = await api('post', '/api/branches', owner.token).send({ name: 'Branch Kandy', invoicePrefix: 'BK-' });
+    expect(b2Res.status).toBe(201);
+    const b2 = b2Res.body.data._id;
+
+    await runWithContext({ tenantId }, async () => {
+      const invB1 = new Invoice({
+        tenantId,
+        branchId: b1,
+        invoiceNumber: 'INV-B1-01',
+        status: 'completed',
+        paymentStatus: 'paid',
+        subtotalCents: 100000,
+        grandTotalCents: 100000,
+        totalPaidCents: 100000,
+        lines: [{ name: 'B1 Item', qty: 1, unitPriceCents: 100000, grossCents: 100000, netCents: 100000, lineTotalCents: 100000 }],
+      });
+      await invB1.save();
+
+      const invB2 = new Invoice({
+        tenantId,
+        branchId: b2,
+        invoiceNumber: 'INV-B2-01',
+        status: 'completed',
+        paymentStatus: 'paid',
+        subtotalCents: 200000,
+        grandTotalCents: 200000,
+        totalPaidCents: 200000,
+        lines: [{ name: 'B2 Item', qty: 1, unitPriceCents: 200000, grossCents: 200000, netCents: 200000, lineTotalCents: 200000 }],
+      });
+      await invB2.save();
+    });
+
+    let noBranchToken;
+    let b1OnlyToken;
+    let multiBranchToken;
+
+    await runWithContext({ tenantId }, async () => {
+      const branchStaffRole = new Role({
+        tenantId,
+        name: 'Report Branch Limited Role',
+        key: 'report_branch_staff',
+        grid: { reports: { view: true } },
+        special: { view_all_branches: false, export_reports: true },
+      });
+      await branchStaffRole.save();
+
+      // (a) User with no branches assigned
+      const uNoBranch = new User({
+        tenantId,
+        branchIds: [],
+        name: 'No Branch Reporter',
+        email: 'nobranch_rep@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await User.collection.insertOne(uNoBranch.toObject());
+      noBranchToken = (await createSession(uNoBranch)).token;
+
+      // (b) User with only branch b1 assigned
+      const uB1 = new User({
+        tenantId,
+        branchIds: [b1],
+        name: 'B1 Reporter',
+        email: 'b1_rep@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await uB1.save();
+      b1OnlyToken = (await createSession(uB1)).token;
+
+      // (c) Multi-branch user with [b1, b2]
+      const uMulti = new User({
+        tenantId,
+        branchIds: [b1, b2],
+        name: 'Multi Branch Reporter',
+        email: 'multi_rep@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await uMulti.save();
+      multiBranchToken = (await createSession(uMulti)).token;
+    });
+
+    // (a) User with no branches assigned gets 403
+    const noBranchRes = await api('get', '/api/reports/sales', noBranchToken);
+    expect(noBranchRes.status).toBe(403);
+    expect(noBranchRes.body.message).toMatch(/no branch assigned/i);
+
+    // (b) User requesting another branch gets 403
+    const forbiddenBranchRes = await api('get', `/api/reports/sales?branchId=${b2}`, b1OnlyToken);
+    expect(forbiddenBranchRes.status).toBe(403);
+    expect(forbiddenBranchRes.body.message).toMatch(/forbidden/i);
+
+    // Default request for b1 user scopes to b1
+    const b1Default = await api('get', '/api/reports/sales', b1OnlyToken);
+    expect(b1Default.status).toBe(200);
+    expect(b1Default.body.data.summary.netSalesCents).toBe(100000);
+
+    // (c) Multi-branch user can pick their own branches
+    const multiB1 = await api('get', `/api/reports/sales?branchId=${b1}`, multiBranchToken);
+    expect(multiB1.status).toBe(200);
+    expect(multiB1.body.data.summary.netSalesCents).toBe(100000);
+
+    const multiB2 = await api('get', `/api/reports/sales?branchId=${b2}`, multiBranchToken);
+    expect(multiB2.status).toBe(200);
+    expect(multiB2.body.data.summary.netSalesCents).toBe(200000);
   });
 });

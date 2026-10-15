@@ -1,4 +1,5 @@
 import { hasSpecial } from '../../core/permissions.js';
+import { forbidden } from '../../core/errors.js';
 import * as reportsService from './services/reports.service.js';
 
 function resolveBranchId(req) {
@@ -6,7 +7,18 @@ function resolveBranchId(req) {
   if (canViewAll) {
     return req.query.branchId || null;
   }
-  return req.auth.branchIds?.[0] || null;
+  const userBranchIds = (req.auth.branchIds || []).map((b) => String(b));
+  if (userBranchIds.length === 0) {
+    throw forbidden('No branch assigned to user');
+  }
+  if (req.query.branchId) {
+    const requested = String(req.query.branchId);
+    if (!userBranchIds.includes(requested)) {
+      throw forbidden('Access to requested branch is forbidden');
+    }
+    return requested;
+  }
+  return userBranchIds[0];
 }
 
 export async function getSalesReport(req, res, next) {
