@@ -144,7 +144,12 @@ This document tracks cross-module questions, architectural assumptions, and revi
    - All report aggregations (Sales, Inventory Valuation, Repairs, Receivables Aging) are strictly tenant-scoped (each pipeline starts with a `$match: { tenantId }`) and branch-scoped unless the caller holds `view_all_branches`.
    - Date ranges are capped at 366 days max (wider queries reject with 400 `DATE_RANGE_EXCEEDED`) and evaluated against Asia/Colombo (UTC+5:30) date boundaries.
    - Cost prices, margins, and profit metrics are masked (`null`) unless the caller holds `view_cost_margin`.
-   - CSV export requires `export_reports` special permission and escapes all formula injection vectors (`=`, `+`, `-`, `@`) with a leading `'`.
+   - CSV export requires `export_reports` special permission and escapes all formula injection vectors (`=`, `+`, `-`, `@`, `\t`, `\r`) on strings with a leading `'`.
+
+### For Dev 2
+
+61. **Dashboard UI refactoring (frontend/src/app/page.js & frontend/src/components/dashboard/DashboardOverview.js).**
+    The dashboard overview UI, hero stats, period toggles, overdue repairs panel, and activity feed were extracted from `page.js` into a dedicated, reusable `DashboardOverview.js` component to keep `page.js` minimal and clean.
 
 ## Go-live checklist
 
