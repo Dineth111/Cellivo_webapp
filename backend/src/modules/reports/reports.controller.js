@@ -109,7 +109,7 @@ export async function exportReportCsv(req, res, next) {
     const { type } = req.params;
     const { startDate, endDate } = req.query;
 
-    const { csv, filename } = await reportsService.exportReportCsv({
+    const { csv, filename, isTruncated, totalCount } = await reportsService.exportReportCsv({
       type,
       tenantId,
       branchId,
@@ -121,6 +121,11 @@ export async function exportReportCsv(req, res, next) {
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (isTruncated) {
+      res.setHeader('X-Export-Truncated', 'true');
+      res.setHeader('X-Export-Total', String(totalCount));
+      res.setHeader('Access-Control-Expose-Headers', 'X-Export-Truncated, X-Export-Total');
+    }
     res.send(csv);
   } catch (err) {
     next(err);

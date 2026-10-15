@@ -331,7 +331,12 @@ export async function exportReportCsv(type, params = {}) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.message || 'Export failed');
   }
-  return res.blob();
+  const isTruncated = res.headers.get('x-export-truncated') === 'true';
+  const totalCount = res.headers.get('x-export-total') ? parseInt(res.headers.get('x-export-total'), 10) : null;
+  const blob = await res.blob();
+  blob.isTruncated = isTruncated;
+  blob.totalCount = totalCount;
+  return blob;
 }
 
 

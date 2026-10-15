@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 import { startDb, stopDb, resetDb } from './helpers.js';
 import { api, signup, addStaff } from './api.js';
 import { runWithContext, runAsPlatform } from '../src/core/tenantContext.js';
@@ -264,11 +265,15 @@ describe('F-17 Reports API', () => {
     const tenantId = owner.user.tenant?._id;
     const branchRes = await api('get', '/api/branches', owner.token);
     const branchId = branchRes.body.data[0]._id;
+    const custRes = await api('post', '/api/customers', owner.token).send({ name: 'Kamal Perera', phone: '0711112233' });
+    const customerId = custRes.body.data._id;
 
     await runWithContext({ tenantId }, async () => {
+      // 1. Invoiced & Delivered ticket (customer owned) -> COUNTS in revenue & profit
       const t1 = new RepairTicket({
         tenantId,
         branchId,
+        customerId,
         ticketNo: 'JOB-REP-01',
         stage: 'Delivered',
         device: { brand: 'Apple', model: 'iPhone 13' },
@@ -284,13 +289,16 @@ describe('F-17 Reports API', () => {
         ],
         partsCostCents: 40000,
         advanceCents: 25000,
+        isInvoiceSettled: true,
         isArchived: false,
       });
       await t1.save();
 
+      // 2. Active ticket (In repair, unsettled) -> activeCount + 1, NO revenue
       const t2 = new RepairTicket({
         tenantId,
         branchId,
+        customerId,
         ticketNo: 'JOB-REP-02',
         stage: 'In repair',
         device: { brand: 'Samsung', model: 'S22' },
@@ -306,23 +314,40 @@ describe('F-17 Reports API', () => {
         ],
         partsCostCents: 10000,
         advanceCents: 0,
+        isInvoiceSettled: false,
         isArchived: false,
       });
       await t2.save();
+
+      // 3. Cancelled ticket -> cancelledCount + 1, NO revenue
+      const t3 = new RepairTicket({
+        tenantId,
+        branchId,
+        customerId,
+        ticketNo: 'JOB-REP-03',
+        stage: 'Cancelled',
+        device: { brand: 'Google', model: 'Pixel 7' },
+        faultDescription: 'Water damage',
+        labourCents: 15000,
+        isInvoiceSettled: false,
+        isArchived: false,
+      });
+      await t3.save();
     });
 
     const res = await api('get', '/api/reports/repairs', owner.token);
     expect(res.status).toBe(200);
     const summary = res.body.data.summary;
 
-    expect(summary.totalTickets).toBe(2);
+    expect(summary.totalTickets).toBe(3);
     expect(summary.deliveredCount).toBe(1);
     expect(summary.activeCount).toBe(1);
-    expect(summary.totalRevenueCents).toBe(175000);
-    expect(summary.totalLabourCents).toBe(80000);
-    expect(summary.totalPartsSellingCents).toBe(95000);
-    expect(summary.totalPartsCostCents).toBe(50000);
-    expect(summary.netRepairsProfitCents).toBe(125000);
+    expect(summary.cancelledCount).toBe(1);
+    expect(summary.totalRevenueCents).toBe(125000);
+    expect(summary.totalLabourCents).toBe(50000);
+    expect(summary.totalPartsSellingCents).toBe(75000);
+    expect(summary.totalPartsCostCents).toBe(40000);
+    expect(summary.netRepairsProfitCents).toBe(85000);
   });
 
   it('6. calculates Receivables Aging report with bucketed outstanding balances', async () => {
@@ -682,5 +707,304 @@ describe('F-17 Reports API', () => {
     const multiB2 = await api('get', `/api/reports/sales?branchId=${b2}`, multiBranchToken);
     expect(multiB2.status).toBe(200);
     expect(multiB2.body.data.summary.netSalesCents).toBe(200000);
+  });
+
+  it('11. excludes held and draft invoices from sales and receivables reports', async () => {
+    const owner = await signup('reports_draft@cellivo.lk', 'Draft Invoices Shop');
+    const tenantId = owner.user.tenant?._id;
+    const branchRes = await api('get', '/api/branches', owner.token);
+    const branchId = branchRes.body.data[0]._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // 1. Completed invoice: 50,000 cents (unpaid) -> MUST be in sales and receivables
+      const invCompleted = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-VALID-01',
+        status: 'completed',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 50000,
+        subtotalCents: 50000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Screen Protector', qty: 1, unitPriceCents: 50000, grossCents: 50000, netCents: 50000, lineTotalCents: 50000 }],
+      });
+      await invCompleted.save();
+
+      // 2. Draft invoice: 30,000 cents -> EXCLUDED from sales and receivables
+      const invDraft = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-DRAFT-01',
+        status: 'draft',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 30000,
+        subtotalCents: 30000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Cable', qty: 1, unitPriceCents: 30000, grossCents: 30000, netCents: 30000, lineTotalCents: 30000 }],
+      });
+      await invDraft.save();
+
+      // 3. Voided invoice: 20,000 cents -> EXCLUDED from sales and receivables
+      const invVoided = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-VOID-01',
+        status: 'voided',
+        paymentStatus: 'unpaid',
+        grandTotalCents: 20000,
+        subtotalCents: 20000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Case', qty: 1, unitPriceCents: 20000, grossCents: 20000, netCents: 20000, lineTotalCents: 20000 }],
+      });
+      await invVoided.save();
+    });
+
+    const salesRes = await api('get', '/api/reports/sales', owner.token);
+    expect(salesRes.status).toBe(200);
+    expect(salesRes.body.data.summary.totalInvoices).toBe(1);
+    expect(salesRes.body.data.summary.grossSalesCents).toBe(50000);
+
+    const recRes = await api('get', '/api/reports/receivables', owner.token);
+    expect(recRes.status).toBe(200);
+    expect(recRes.body.data.summary.totalInvoices).toBe(1);
+    expect(recRes.body.data.summary.totalReceivablesCents).toBe(50000);
+  });
+
+  it('12. repairs report validates stage and technicianId, filters by technician, and excludes cancelled tickets from revenue', async () => {
+    const owner = await signup('reports_tech_filter@cellivo.lk', 'Tech Filter Shop');
+    const tenantId = owner.user.tenant?._id;
+    const branchRes = await api('get', '/api/branches', owner.token);
+    const branchId = branchRes.body.data[0]._id;
+
+    // Validate 400 on malformed queries
+    const badStageObj = await api('get', '/api/reports/repairs?stage[$ne]=Cancelled', owner.token);
+    expect(badStageObj.status).toBe(400);
+
+    const badStageUnknown = await api('get', '/api/reports/repairs?stage=NonExistentStage', owner.token);
+    expect(badStageUnknown.status).toBe(400);
+
+    const badTechId = await api('get', '/api/reports/repairs?technicianId=not-an-objectid', owner.token);
+    expect(badTechId.status).toBe(400);
+
+    // Create a technician staff user
+    const staffRes = await addStaff(owner, 'technician', 'tech_assigned@cellivo.lk');
+    const techUser = staffRes.user;
+
+    const custRes = await api('post', '/api/customers', owner.token).send({ name: 'Saman Kumara', phone: '0779998877' });
+    const customerId = custRes.body.data._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // Ticket 1 assigned to technician: Delivered & settled (60,000 cents)
+      const tAssigned = new RepairTicket({
+        tenantId,
+        branchId,
+        customerId,
+        technicianId: techUser._id,
+        ticketNo: 'JOB-TECH-01',
+        stage: 'Delivered',
+        device: { brand: 'Xiaomi', model: 'Note 11' },
+        faultDescription: 'Screen issue',
+        labourCents: 60000,
+        isInvoiceSettled: true,
+        isArchived: false,
+      });
+      await tAssigned.save();
+
+      // Ticket 2 unassigned (technicianId: null): Delivered & settled (40,000 cents)
+      const tUnassigned = new RepairTicket({
+        tenantId,
+        branchId,
+        customerId,
+        technicianId: null,
+        ticketNo: 'JOB-UNASSIGNED-01',
+        stage: 'Delivered',
+        device: { brand: 'Vivo', model: 'Y20' },
+        faultDescription: 'Mic issue',
+        labourCents: 40000,
+        isInvoiceSettled: true,
+        isArchived: false,
+      });
+      await tUnassigned.save();
+    });
+
+    // All tickets without technician filter -> totalRevenue = 100,000
+    const allRes = await api('get', '/api/reports/repairs', owner.token);
+    expect(allRes.status).toBe(200);
+    expect(allRes.body.data.summary.totalRevenueCents).toBe(100000);
+
+    // Filter by technicianId -> totalRevenue = 60,000, only 1 ticket returned
+    const techFilterRes = await api('get', `/api/reports/repairs?technicianId=${techUser._id}`, owner.token);
+    expect(techFilterRes.status).toBe(200);
+    expect(techFilterRes.body.data.summary.totalRevenueCents).toBe(60000);
+    expect(techFilterRes.body.data.summary.totalTickets).toBe(1);
+    expect(techFilterRes.body.data.data[0].technicianName).toBe(techUser.name);
+  });
+
+  it('13. inventory valuation computes sum over each stock level of qty * averageCostCents and excludes non-stock products', async () => {
+    const owner = await signup('reports_multistock@cellivo.lk', 'Multi Stock Shop');
+    const tenantId = owner.user.tenant?._id;
+
+    await runAsPlatform(async () => {
+      await Tenant.findByIdAndUpdate(tenantId, { branchLimitOverride: 5 });
+    });
+
+    const b1 = (await api('get', '/api/branches', owner.token)).body.data[0]._id;
+    const b2Res = await api('post', '/api/branches', owner.token).send({
+      name: 'Branch Kandy',
+      invoicePrefix: 'BK-',
+    });
+    expect(b2Res.status).toBe(201);
+    const b2 = b2Res.body.data._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // Product 1: In 2 branches with different average costs
+      // Branch 1: qty = 10, averageCost = 10,000 cents -> 100,000 cents
+      // Branch 2: qty = 5, averageCost = 20,000 cents -> 100,000 cents
+      // Sum over each stock level = 200,000 cents (NOT 15 * 15,000 = 225,000 cents)
+      const p1 = new Product({
+        tenantId,
+        name: 'Battery Pack',
+        barcode: 'BP-001',
+        sellingPriceCents: 30000,
+        reorderLevel: 8,
+        trackStock: true,
+      });
+      await p1.save();
+
+      const sl1 = new StockLevel({
+        tenantId,
+        branchId: b1,
+        productId: p1._id,
+        qty: 10,
+        averageCostCents: 10000,
+      });
+      await sl1.save();
+
+      const sl2 = new StockLevel({
+        tenantId,
+        branchId: b2,
+        productId: p1._id,
+        qty: 5,
+        averageCostCents: 20000,
+      });
+      await sl2.save();
+
+      // Product 2: Non-stock-tracked product -> MUST be excluded from inventory valuation
+      const p2Id = new (await import('mongoose')).default.Types.ObjectId();
+      await Product.collection.insertOne({
+        _id: p2Id,
+        tenantId,
+        name: 'Software Upgrade Service',
+        barcode: 'SRV-001',
+        sellingPriceCents: 40000,
+        reorderLevel: 0,
+        trackStock: false,
+        isArchived: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
+
+    const res = await api('get', '/api/reports/inventory', owner.token);
+    expect(res.status).toBe(200);
+    const summary = res.body.data.summary;
+
+    expect(summary.totalProducts).toBe(1);
+    expect(summary.totalUnits).toBe(15);
+    // Exact sum over each stock level: (10 * 10,000) + (5 * 20,000) = 200,000 cents
+    expect(summary.totalCostValueCents).toBe(200000);
+    // Retail value: 15 * 30,000 = 450,000 cents
+    expect(summary.totalRetailValueCents).toBe(450000);
+
+    // Single branch filter: b1 only -> totalUnits = 10, totalCostValueCents = 100000
+    const resB1 = await api('get', `/api/reports/inventory?branchId=${b1}`, owner.token);
+    expect(resB1.status).toBe(200);
+    expect(resB1.body.data.summary.totalUnits).toBe(10);
+    expect(resB1.body.data.summary.totalCostValueCents).toBe(100000);
+  });
+
+  it('14. CSV export formats negative profit and refunds without apostrophe, and exports > 200 rows without silent truncation', async () => {
+    const owner = await signup('reports_csv_negative@cellivo.lk', 'Negative CSV Shop');
+    const tenantId = owner.user.tenant?._id;
+    const branchRes = await api('get', '/api/branches', owner.token);
+    const branchId = branchRes.body.data[0]._id;
+
+    await runWithContext({ tenantId }, async () => {
+      // 1. Sale with negative profit: selling price 5,000 cents, cost price 17,500 cents -> profit = -12,500 cents (-125.00 Rs)
+      const invNegative = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-LOSS-01',
+        status: 'completed',
+        paymentStatus: 'paid',
+        grandTotalCents: 5000,
+        subtotalCents: 5000,
+        totalPaidCents: 5000,
+        lines: [
+          {
+            name: 'Clearance Case',
+            qty: 1,
+            unitPriceCents: 5000,
+            costPriceCents: 17500,
+            grossCents: 5000,
+            netCents: 5000,
+            lineTotalCents: 5000,
+          },
+        ],
+      });
+      await invNegative.save();
+
+      // 2. Refund CreditNote: 2,000 cents refund
+      const cn = new CreditNote({
+        tenantId,
+        branchId,
+        creditNoteNumber: 'CN-REFUND-01',
+        originalInvoiceId: invNegative._id,
+        originalInvoiceNumber: invNegative.invoiceNumber,
+        subtotalCents: 2000,
+        totalRefundCents: 2000,
+        items: [{ name: 'Clearance Case', qty: 1, unitPriceCents: 2000, refundCents: 2000 }],
+      });
+      await cn.save();
+
+      // 3. Batch seed 205 invoices to test > 200 rows pagination without truncation
+      const tObjId = new mongoose.Types.ObjectId(tenantId);
+      const bObjId = new mongoose.Types.ObjectId(branchId);
+      const bulkInvoices = [];
+      for (let i = 1; i <= 205; i++) {
+        bulkInvoices.push({
+          tenantId: tObjId,
+          branchId: bObjId,
+          invoiceNumber: `INV-BULK-${String(i).padStart(4, '0')}`,
+          status: 'completed',
+          paymentStatus: 'paid',
+          grandTotalCents: 10000,
+          subtotalCents: 10000,
+          totalPaidCents: 10000,
+          lines: [{ name: 'Bulk Item', qty: 1, unitPriceCents: 10000, grossCents: 10000, netCents: 10000, lineTotalCents: 10000 }],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+      await Invoice.collection.insertMany(bulkInvoices);
+    });
+
+    const exportRes = await api('get', '/api/reports/sales/export', owner.token);
+    expect(exportRes.status).toBe(200);
+    expect(exportRes.headers['content-type']).toMatch(/text\/csv/);
+
+    const csvText = exportRes.text;
+
+    // (a) Verify negative profit format: "-125.00" must NOT be prefixed with apostrophe "'-125.00"
+    expect(csvText).toContain('-125.00');
+    expect(csvText).not.toContain("'-125.00");
+
+    // (b) Verify that all 206 invoices are exported (not truncated at page 1 / 200 items)
+    const lines = csvText.trim().split('\r\n');
+    // Header + at least 206 data rows
+    expect(lines.length).toBeGreaterThanOrEqual(207);
+    expect(csvText).toContain('INV-LOSS-01');
+    expect(csvText).toContain('INV-BULK-0001');
+    expect(csvText).toContain('INV-BULK-0205');
   });
 });
