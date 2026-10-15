@@ -30,6 +30,7 @@ import repairRoutes from './modules/repairs/repairs.routes.js';
 import publicRepairRoutes from './modules/repairs/public.routes.js';
 import inventoryRoutes from './modules/inventory/routes/inventory.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import reportsRoutes from './modules/reports/reports.routes.js';
 
 export function createApp() {
   const app = express();
@@ -71,6 +72,7 @@ export function createApp() {
   app.use('/api/repairs', repairRoutes);
   app.use('/api/public/repairs', publicRepairRoutes);
   app.use('/api/dashboard', dashboardRoutes);
+  app.use('/api/reports', reportsRoutes);
   app.use('/api/public', publicRoutes);
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
   app.use('/api/pos/ledger', posLedgerRoutes);
