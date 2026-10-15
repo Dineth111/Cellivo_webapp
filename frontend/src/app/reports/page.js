@@ -115,6 +115,24 @@ export default function ReportsPage() {
       </AppHeader>
 
       <main style={{ maxWidth: '1200px', margin: '1.5rem auto', padding: '0 1rem' }}>
+        <style jsx global>{`
+          @media (max-width: 640px) {
+            .reports-table-desktop {
+              display: none !important;
+            }
+            .reports-cards-mobile {
+              display: grid !important;
+            }
+          }
+          @media (min-width: 641px) {
+            .reports-table-desktop {
+              display: block !important;
+            }
+            .reports-cards-mobile {
+              display: none !important;
+            }
+          }
+        `}</style>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
             <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 600 }}>Business Reports</h1>
@@ -141,7 +159,16 @@ export default function ReportsPage() {
         )}
 
         {/* Tab switcher */}
-        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.5rem',
+            borderBottom: '1px solid #e2e8f0',
+            marginBottom: '1.5rem',
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+          }}
+        >
           {[
             { id: 'sales', label: 'Sales Report' },
             { id: 'inventory', label: 'Inventory Valuation' },
@@ -155,13 +182,16 @@ export default function ReportsPage() {
                 setReportType(t.id);
               }}
               style={{
+                flex: 'none',
                 padding: '0.75rem 1.25rem',
                 border: 'none',
                 background: 'none',
                 borderBottom: reportType === t.id ? '2px solid var(--primary, #0ea5e9)' : '2px solid transparent',
-                fontWeight: reportType === t.id ? 600 : 400,
+                fontWeight: reportType === t.id ? 700 : 500,
                 color: reportType === t.id ? 'var(--primary, #0ea5e9)' : '#64748b',
                 cursor: 'pointer',
+                minHeight: 44,
+                whiteSpace: 'nowrap',
               }}
             >
               {t.label}
@@ -386,7 +416,9 @@ export default function ReportsPage() {
                   No records found for the selected criteria.
                 </div>
               ) : (
-                <Table>
+                <>
+                  <div className="reports-table-desktop">
+                    <Table>
                   {reportType === 'sales' && (
                     <>
                       <thead>
@@ -571,7 +603,194 @@ export default function ReportsPage() {
                     </>
                   )}
                 </Table>
-              )}
+              </div>
+
+              {/* Mobile Card List */}
+              <div className="reports-cards-mobile" style={{ display: 'none', gap: 12 }}>
+                {reportType === 'sales' &&
+                  items.map((inv) => (
+                    <div
+                      key={inv._id}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 10,
+                        padding: 14,
+                        background: '#f8fafc',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 800, fontSize: 15, color: '#0f172a' }}>{inv.invoiceNumber}</span>
+                        <Badge
+                          tone={
+                            inv.paymentStatus === 'paid'
+                              ? 'success'
+                              : inv.paymentStatus === 'partially_paid'
+                              ? 'warning'
+                              : 'danger'
+                          }
+                        >
+                          {inv.paymentStatus}
+                        </Badge>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#475569' }}>
+                        {date(inv.createdAt)} · {inv.customerName} ({inv.branchName})
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                        <span>Total: <strong>{money(inv.grandTotalCents)}</strong></span>
+                        <span>Paid: {money(inv.totalPaidCents)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                        <span style={{ color: '#64748b' }}>Balance Due:</span>
+                        <strong style={{ color: inv.balanceDueCents > 0 ? '#dc2626' : '#16a34a' }}>
+                          {money(inv.balanceDueCents)}
+                        </strong>
+                      </div>
+                      {(inv.costCents != null || inv.profitCents != null) && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b', borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
+                          {inv.costCents != null && <span>Cost: {money(inv.costCents)}</span>}
+                          {inv.profitCents != null && (
+                            <span style={{ color: '#16a34a', fontWeight: 600 }}>Profit: {money(inv.profitCents)}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                {reportType === 'inventory' &&
+                  items.map((prod) => (
+                    <div
+                      key={prod._id}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 10,
+                        padding: 14,
+                        background: '#f8fafc',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 800, fontSize: 15, color: '#0f172a' }}>{prod.name}</span>
+                        {prod.isLowStock ? <Badge tone="danger">Low Stock</Badge> : <Badge tone="success">In Stock</Badge>}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        Barcode: <code>{prod.barcode}</code> {prod.sku && `· SKU: ${prod.sku}`}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                        <span>Qty on Hand: <strong>{prod.qtyOnHand}</strong></span>
+                        <span>Retail: {money(prod.sellingPriceCents)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14 }}>
+                        <span style={{ color: '#64748b' }}>Total Retail Value:</span>
+                        <strong style={{ color: '#0ea5e9' }}>{money(prod.totalRetailValueCents)}</strong>
+                      </div>
+                      {(prod.averageCostCents != null || prod.totalCostValueCents != null) && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b', borderTop: '1px dashed #e2e8f0', paddingTop: 6 }}>
+                          {prod.averageCostCents != null && <span>Avg Cost: {money(prod.averageCostCents)}</span>}
+                          {prod.totalCostValueCents != null && <span>Total Cost: {money(prod.totalCostValueCents)}</span>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                {reportType === 'repairs' &&
+                  items.map((t) => (
+                    <div
+                      key={t._id}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 10,
+                        padding: 14,
+                        background: '#f8fafc',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Link href={`/repairs/${t._id}`} style={{ fontWeight: 800, fontSize: 15, color: 'var(--primary, #0ea5e9)', textDecoration: 'none' }}>
+                          {t.ticketNo}
+                        </Link>
+                        <Badge
+                          tone={
+                            t.stage === 'Delivered'
+                              ? 'success'
+                              : t.stage === 'Cancelled' || t.stage === 'Unrepairable'
+                              ? 'danger'
+                              : 'warning'
+                          }
+                        >
+                          {t.stage}
+                        </Badge>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#475569' }}>
+                        {t.device} · {t.customerName}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>
+                        Intake: {date(t.createdAt)} {t.publicCode && `· Code: ${t.publicCode}`}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                        <span>Labour: {money(t.labourCents)}</span>
+                        <span>Parts: {money(t.partsSellingCents)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 14 }}>
+                        <span style={{ color: '#64748b' }}>Total: <strong style={{ color: '#0f172a' }}>{money(t.grandTotalCents)}</strong></span>
+                        <Badge tone={t.paymentStatus === 'paid' ? 'success' : 'warning'}>{t.paymentStatus}</Badge>
+                      </div>
+                    </div>
+                  ))}
+
+                {reportType === 'receivables' &&
+                  items.map((ar) => (
+                    <div
+                      key={ar._id}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 10,
+                        padding: 14,
+                        background: '#f8fafc',
+                        display: 'grid',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontWeight: 800, fontSize: 15, color: '#0f172a' }}>{ar.invoiceNumber}</span>
+                        <Badge tone="danger">{ar.paymentStatus}</Badge>
+                      </div>
+                      <div style={{ fontSize: 13, color: '#475569' }}>
+                        {ar.customerName}
+                        {ar.customerPhone && (
+                          <a
+                            href={`tel:${ar.customerPhone}`}
+                            style={{
+                              color: 'var(--primary, #0ea5e9)',
+                              marginLeft: 8,
+                              textDecoration: 'none',
+                              fontWeight: 600,
+                            }}
+                          >
+                            📞 {ar.customerPhone}
+                          </a>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
+                        <span>Date: {date(ar.createdAt)}</span>
+                        <span style={{ color: '#f59e0b', fontWeight: 600 }}>{ar.daysOutstanding} days overdue</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                        <span>Total: {money(ar.grandTotalCents)}</span>
+                        <span>Paid: {money(ar.totalPaidCents)}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15 }}>
+                        <span style={{ color: '#64748b' }}>Outstanding Balance:</span>
+                        <strong style={{ color: '#dc2626' }}>{money(ar.balanceDueCents)}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
             </Card>
           </>
         )}

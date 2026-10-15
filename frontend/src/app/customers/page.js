@@ -297,6 +297,24 @@ export default function CustomersPage() {
 
   return (
     <Shell user={profile?.name}>
+      <style jsx global>{`
+        @media (max-width: 640px) {
+          .customers-table-desktop {
+            display: none !important;
+          }
+          .customers-cards-mobile {
+            display: grid !important;
+          }
+        }
+        @media (min-width: 641px) {
+          .customers-table-desktop {
+            display: block !important;
+          }
+          .customers-cards-mobile {
+            display: none !important;
+          }
+        }
+      `}</style>
       {error && (
         <Alert tone="danger">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -443,107 +461,213 @@ export default function CustomersPage() {
           </div>
         ) : (
           <>
-            <Table head={['Customer', 'Phone', 'NIC', 'Type', 'Credit Balance', 'Loyalty Points', 'Opt-in', 'Actions']}>
+            <div className="customers-table-desktop">
+              <Table head={['Customer', 'Phone', 'NIC', 'Type', 'Credit Balance', 'Loyalty Points', 'Opt-in', 'Actions']}>
+                {customers.map((c) => (
+                  <tr key={c._id}>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <Link
+                          href={`/customers/${c._id}`}
+                          id={`link-cust-${c._id}`}
+                          style={{ fontWeight: 600, fontSize: 14, textDecoration: 'none' }}
+                        >
+                          {c.name}
+                        </Link>
+                        {c.email && <small style={{ color: 'var(--muted)' }}>{c.email}</small>}
+                        {c.tags?.length > 0 && (
+                          <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                            {c.tags.map((t) => (
+                              <span
+                                key={t}
+                                style={{
+                                  fontSize: 11,
+                                  padding: '1px 6px',
+                                  borderRadius: 4,
+                                  background: 'var(--tint)',
+                                  color: 'var(--primary)',
+                                }}
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <code>{c.phone || '-'}</code>
+                    </td>
+                    <td>
+                      <code>{c.nic || '-'}</code>
+                    </td>
+                    <td>
+                      <Badge tone={c.type === 'wholesale' ? 'warning' : 'neutral'}>
+                        {c.type === 'wholesale' ? 'Wholesale' : 'Retail'}
+                      </Badge>
+                    </td>
+                    <td>
+                      <strong style={{ color: c.currentBalanceCents > 0 ? 'var(--danger)' : 'inherit' }}>
+                        {money(c.currentBalanceCents || 0)}
+                      </strong>
+                      {c.creditLimitCents > 0 && (
+                        <div>
+                          <small style={{ color: 'var(--muted)' }}>Limit: {money(c.creditLimitCents)}</small>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: 'var(--primary)' }}>
+                        {(c.loyaltyPoints || 0).toLocaleString()} pts
+                      </span>
+                    </td>
+                    <td>
+                      <Badge tone={c.marketingOptIn ? 'success' : 'neutral'}>
+                        {c.marketingOptIn ? 'Opted In' : 'No'}
+                      </Badge>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <Link href={`/customers/${c._id}`}>
+                          <Button
+                            id={`btn-view-${c._id}`}
+                            variant="secondary"
+                            style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
+                          >
+                            View
+                          </Button>
+                        </Link>
+                        {!c.isArchived && (
+                          <Button
+                            id={`btn-archive-${c._id}`}
+                            variant="danger"
+                            onClick={() => handleArchive(c._id, c.name)}
+                            style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
+                          >
+                            Archive
+                          </Button>
+                        )}
+                        {isOwner && !c.isArchived && (
+                          <Button
+                            id={`btn-merge-start-${c._id}`}
+                            variant="secondary"
+                            onClick={() => startMerge(c)}
+                            style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
+                            title="Merge customer into another"
+                          >
+                            Merge…
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
+
+            {/* Mobile Cards List */}
+            <div className="customers-cards-mobile" style={{ display: 'none', gap: 12 }}>
               {customers.map((c) => (
-                <tr key={c._id}>
-                  <td>
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div
+                  key={c._id}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    padding: 14,
+                    background: 'var(--surface)',
+                    display: 'grid',
+                    gap: 8,
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
                       <Link
                         href={`/customers/${c._id}`}
-                        id={`link-cust-${c._id}`}
-                        style={{ fontWeight: 600, fontSize: 14, textDecoration: 'none' }}
+                        id={`link-cust-mobile-${c._id}`}
+                        style={{ fontWeight: 800, fontSize: 16, color: 'var(--brand)', textDecoration: 'none' }}
                       >
                         {c.name}
                       </Link>
-                      {c.email && <small style={{ color: 'var(--muted)' }}>{c.email}</small>}
-                      {c.tags?.length > 0 && (
-                        <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
-                          {c.tags.map((t) => (
-                            <span
-                              key={t}
-                              style={{
-                                fontSize: 11,
-                                padding: '1px 6px',
-                                borderRadius: 4,
-                                background: 'var(--tint)',
-                                color: 'var(--primary)',
-                              }}
-                            >
-                              {t}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      {c.email && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{c.email}</div>}
                     </div>
-                  </td>
-                  <td>
-                    <code>{c.phone || '-'}</code>
-                  </td>
-                  <td>
-                    <code>{c.nic || '-'}</code>
-                  </td>
-                  <td>
                     <Badge tone={c.type === 'wholesale' ? 'warning' : 'neutral'}>
                       {c.type === 'wholesale' ? 'Wholesale' : 'Retail'}
                     </Badge>
-                  </td>
-                  <td>
-                    <strong style={{ color: c.currentBalanceCents > 0 ? 'var(--danger)' : 'inherit' }}>
-                      {money(c.currentBalanceCents || 0)}
-                    </strong>
-                    {c.creditLimitCents > 0 && (
-                      <div>
-                        <small style={{ color: 'var(--muted)' }}>Limit: {money(c.creditLimitCents)}</small>
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <span style={{ fontWeight: 600, color: 'var(--primary)' }}>
-                      {(c.loyaltyPoints || 0).toLocaleString()} pts
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--heading)' }}>
+                    <span>
+                      Phone:{' '}
+                      {c.phone ? (
+                        <a href={`tel:${c.phone}`} style={{ color: 'var(--brand)', fontWeight: 600, textDecoration: 'none' }}>
+                          📞 {c.phone}
+                        </a>
+                      ) : (
+                        '-'
+                      )}
                     </span>
-                  </td>
-                  <td>
-                    <Badge tone={c.marketingOptIn ? 'success' : 'neutral'}>
-                      {c.marketingOptIn ? 'Opted In' : 'No'}
-                    </Badge>
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <Link href={`/customers/${c._id}`}>
-                        <Button
-                          id={`btn-view-${c._id}`}
-                          variant="secondary"
-                          style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
-                        >
-                          View
-                        </Button>
-                      </Link>
-                      {!c.isArchived && (
-                        <Button
-                          id={`btn-archive-${c._id}`}
-                          variant="danger"
-                          onClick={() => handleArchive(c._id, c.name)}
-                          style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
-                        >
-                          Archive
-                        </Button>
-                      )}
-                      {isOwner && !c.isArchived && (
-                        <Button
-                          id={`btn-merge-start-${c._id}`}
-                          variant="secondary"
-                          onClick={() => startMerge(c)}
-                          style={{ minHeight: 36, padding: '4px 10px', fontSize: 13 }}
-                          title="Merge customer into another"
-                        >
-                          Merge…
-                        </Button>
-                      )}
+                    {c.nic && <span style={{ color: 'var(--muted)', fontSize: 12 }}>NIC: {c.nic}</span>}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                    <div>
+                      <span style={{ color: 'var(--muted)', fontSize: 12, display: 'block' }}>Credit Balance</span>
+                      <strong style={{ color: c.currentBalanceCents > 0 ? 'var(--danger)' : 'inherit', fontSize: 15 }}>
+                        {money(c.currentBalanceCents || 0)}
+                      </strong>
                     </div>
-                  </td>
-                </tr>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ color: 'var(--muted)', fontSize: 12, display: 'block' }}>Loyalty</span>
+                      <span style={{ fontWeight: 700, color: 'var(--primary)' }}>
+                        {(c.loyaltyPoints || 0).toLocaleString()} pts
+                      </span>
+                    </div>
+                  </div>
+
+                  {c.tags?.length > 0 && (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {c.tags.map((t) => (
+                        <span
+                          key={t}
+                          style={{
+                            fontSize: 11,
+                            padding: '1px 6px',
+                            borderRadius: 4,
+                            background: 'var(--tint)',
+                            color: 'var(--primary)',
+                          }}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4 }}>
+                    <Link href={`/customers/${c._id}`}>
+                      <Button
+                        id={`btn-view-m-${c._id}`}
+                        variant="secondary"
+                        style={{ minHeight: 44, padding: '0 16px', fontSize: 13 }}
+                      >
+                        View Profile
+                      </Button>
+                    </Link>
+                    {!c.isArchived && (
+                      <Button
+                        id={`btn-archive-m-${c._id}`}
+                        variant="danger"
+                        onClick={() => handleArchive(c._id, c.name)}
+                        style={{ minHeight: 44, padding: '0 14px', fontSize: 13 }}
+                      >
+                        Archive
+                      </Button>
+                    )}
+                  </div>
+                </div>
               ))}
-            </Table>
+            </div>
 
             <div
               style={{

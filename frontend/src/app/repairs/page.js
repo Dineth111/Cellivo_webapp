@@ -91,6 +91,7 @@ export default function RepairsBoardPage() {
   const [error, setError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
   const [movingTicketId, setMovingTicketId] = useState(null);
+  const [activeMobileStage, setActiveMobileStage] = useState('Received');
 
   const fetchBoard = useCallback(async () => {
     setLoading(true);
@@ -187,8 +188,148 @@ export default function RepairsBoardPage() {
 
   const overdueCount = overdueList.length;
 
+  const renderTicketCard = (ticket, stage) => {
+    const overdue = isOverdue(ticket);
+    const allowedMoves = (STAGE_TRANSITIONS[stage] || []).filter(
+      (m) => !m.ownerOnly || isOwner
+    );
+
+    return (
+      <div
+        key={ticket._id}
+        style={{
+          background: 'var(--surface)',
+          border: overdue ? '2px solid var(--danger)' : '1px solid var(--border)',
+          borderRadius: 12,
+          padding: 12,
+          display: 'grid',
+          gap: 8,
+          boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Link
+            href={`/repairs/${ticket._id}`}
+            style={{
+              fontWeight: 800,
+              fontSize: 14,
+              color: 'var(--brand)',
+              textDecoration: 'none',
+              minHeight: 44,
+              display: 'inline-flex',
+              alignItems: 'center',
+            }}
+          >
+            {ticket.ticketNo}
+          </Link>
+
+          {overdue && (
+            <span
+              style={{
+                background: 'var(--danger-bg)',
+                color: 'var(--danger)',
+                fontSize: 11,
+                fontWeight: 800,
+                padding: '2px 8px',
+                borderRadius: 999,
+                border: '1px solid var(--danger)',
+              }}
+              role="status"
+            >
+              OVERDUE
+            </span>
+          )}
+        </div>
+
+        <div style={{ fontSize: 13, color: 'var(--heading)', fontWeight: 600 }}>
+          {ticket.device?.brand} {ticket.device?.model}
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--secondary)' }}>
+          Customer: {ticket.customerId?.name || 'Walk-in'}
+        </div>
+
+        <p
+          style={{
+            fontSize: 12,
+            color: 'var(--body)',
+            background: 'var(--bg)',
+            padding: '6px 8px',
+            borderRadius: 6,
+            margin: 0,
+            lineHeight: 1.3,
+          }}
+        >
+          {ticket.faultDescription}
+        </p>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}>
+          <span>Tech: {ticket.technicianId?.name || 'Unassigned'}</span>
+          {ticket.advanceCents > 0 && <span>Adv: {money(ticket.advanceCents)}</span>}
+        </div>
+
+        {/* Quick Stage Transition Actions */}
+        {allowedMoves.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              flexWrap: 'wrap',
+              marginTop: 6,
+              paddingTop: 6,
+              borderTop: '1px solid var(--border)',
+            }}
+          >
+            {allowedMoves.map((m) => (
+              <button
+                key={m.to}
+                onClick={() => handleStageMove(ticket, m.to)}
+                disabled={movingTicketId === ticket._id}
+                style={{
+                  border: '1px solid var(--input-border)',
+                  background: 'var(--surface)',
+                  color: m.to === 'Cancelled' ? 'var(--danger)' : 'var(--heading)',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  minHeight: 44,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                aria-label={`Move ticket ${ticket.ticketNo} to ${m.to}`}
+              >
+                {movingTicketId === ticket._id ? 'Moving...' : m.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <Shell user={profile?.name}>
+      <style jsx global>{`
+        @media (max-width: 640px) {
+          .repairs-board-desktop {
+            display: none !important;
+          }
+          .repairs-board-mobile {
+            display: block !important;
+          }
+        }
+        @media (min-width: 641px) {
+          .repairs-board-desktop {
+            display: grid !important;
+          }
+          .repairs-board-mobile {
+            display: none !important;
+          }
+        }
+      `}</style>
       {/* Top Header / Actions */}
       <div
         style={{
@@ -360,205 +501,169 @@ export default function RepairsBoardPage() {
           <p style={{ marginTop: 12, color: 'var(--secondary)' }}>Loading repair board...</p>
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridAutoFlow: 'column',
-            gridAutoColumns: '310px',
-            gap: 14,
-            overflowX: 'auto',
-            paddingBottom: 24,
-            alignItems: 'start',
-          }}
-          role="region"
-          aria-label="Repair stages kanban board"
-        >
-          {STAGES.map((stage) => {
-            const column = board[stage] || { count: 0, items: [] };
-            const isTerminal = ['Delivered', 'Unrepairable', 'Cancelled'].includes(stage);
+        <>
+          {/* Desktop Kanban Board */}
+          <div
+            className="repairs-board-desktop"
+            style={{
+              display: 'grid',
+              gridAutoFlow: 'column',
+              gridAutoColumns: '310px',
+              gap: 14,
+              overflowX: 'auto',
+              paddingBottom: 24,
+              alignItems: 'start',
+            }}
+            role="region"
+            aria-label="Repair stages kanban board"
+          >
+            {STAGES.map((stage) => {
+              const column = board[stage] || { count: 0, items: [] };
+              const isTerminal = ['Delivered', 'Unrepairable', 'Cancelled'].includes(stage);
 
-            return (
-              <div
-                key={stage}
-                style={{
-                  background: isTerminal ? '#f0f3f8' : 'var(--surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 16,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  maxHeight: 'calc(100vh - 220px)',
-                  boxShadow: '0 1px 3px rgba(16, 24, 40, 0.05)',
-                }}
-              >
-                {/* Column Header */}
+              return (
                 <div
+                  key={stage}
                   style={{
-                    padding: '14px 16px',
-                    borderBottom: '1px solid var(--border)',
+                    background: isTerminal ? '#f0f3f8' : 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 16,
                     display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    background: isTerminal ? 'transparent' : 'rgba(238, 242, 255, 0.4)',
-                    borderTopLeftRadius: 16,
-                    borderTopRightRadius: 16,
+                    flexDirection: 'column',
+                    maxHeight: 'calc(100vh - 220px)',
+                    boxShadow: '0 1px 3px rgba(16, 24, 40, 0.05)',
                   }}
                 >
-                  <strong style={{ fontSize: 14, color: 'var(--heading)' }}>{stage}</strong>
-                  <span
+                  {/* Column Header */}
+                  <div
                     style={{
-                      background: 'var(--tint)',
-                      color: 'var(--brand)',
-                      fontSize: 12,
-                      fontWeight: 800,
-                      padding: '2px 8px',
-                      borderRadius: 999,
+                      padding: '14px 16px',
+                      borderBottom: '1px solid var(--border)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: isTerminal ? 'transparent' : 'rgba(238, 242, 255, 0.4)',
+                      borderTopLeftRadius: 16,
+                      borderTopRightRadius: 16,
                     }}
                   >
-                    {column.count}
-                  </span>
-                </div>
+                    <strong style={{ fontSize: 14, color: 'var(--heading)' }}>{stage}</strong>
+                    <span
+                      style={{
+                        background: 'var(--tint)',
+                        color: 'var(--brand)',
+                        fontSize: 12,
+                        fontWeight: 800,
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                      }}
+                    >
+                      {column.count}
+                    </span>
+                  </div>
 
-                {/* Column Items */}
+                  {/* Column Items */}
+                  <div
+                    style={{
+                      padding: 12,
+                      display: 'grid',
+                      gap: 10,
+                      overflowY: 'auto',
+                    }}
+                  >
+                    {column.items.length === 0 ? (
+                      <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
+                        No tickets in {stage}
+                      </div>
+                    ) : (
+                      column.items.map((ticket) => renderTicketCard(ticket, stage))
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Mobile Stage Selector & Card List */}
+          <div className="repairs-board-mobile" style={{ display: 'none' }}>
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                overflowX: 'auto',
+                paddingBottom: 10,
+                marginBottom: 16,
+                WebkitOverflowScrolling: 'touch',
+              }}
+            >
+              {STAGES.map((st) => {
+                const count = board[st]?.count ?? 0;
+                const isSelected = activeMobileStage === st;
+                return (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setActiveMobileStage(st)}
+                    style={{
+                      flex: 'none',
+                      padding: '8px 14px',
+                      borderRadius: 999,
+                      border: isSelected ? '2px solid var(--brand)' : '1px solid var(--border)',
+                      background: isSelected ? 'var(--tint)' : 'var(--surface)',
+                      color: isSelected ? 'var(--brand)' : 'var(--heading)',
+                      fontWeight: 700,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                      minHeight: 44,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <span>{st}</span>
+                    <span
+                      style={{
+                        background: isSelected ? 'var(--brand)' : 'var(--muted-bg, #e2e8f0)',
+                        color: isSelected ? '#ffffff' : 'var(--secondary)',
+                        borderRadius: 999,
+                        padding: '2px 6px',
+                        fontSize: 11,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Mobile Stage Cards List */}
+            <div style={{ display: 'grid', gap: 10 }}>
+              {(board[activeMobileStage]?.items || []).length === 0 ? (
                 <div
                   style={{
-                    padding: 12,
-                    display: 'grid',
-                    gap: 10,
-                    overflowY: 'auto',
+                    textAlign: 'center',
+                    padding: '36px 16px',
+                    background: 'var(--surface)',
+                    borderRadius: 12,
+                    border: '1px solid var(--border)',
+                    color: 'var(--secondary)',
                   }}
                 >
-                  {column.items.length === 0 ? (
-                    <div style={{ padding: '24px 8px', textAlign: 'center', color: 'var(--muted)', fontSize: 12 }}>
-                      No tickets in {stage}
-                    </div>
-                  ) : (
-                    column.items.map((ticket) => {
-                      const overdue = isOverdue(ticket);
-                      const allowedMoves = (STAGE_TRANSITIONS[stage] || []).filter(
-                        (m) => !m.ownerOnly || isOwner
-                      );
-
-                      return (
-                        <div
-                          key={ticket._id}
-                          style={{
-                            background: 'var(--surface)',
-                            border: overdue ? '2px solid var(--danger)' : '1px solid var(--border)',
-                            borderRadius: 12,
-                            padding: 12,
-                            display: 'grid',
-                            gap: 8,
-                            boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Link
-                              href={`/repairs/${ticket._id}`}
-                              style={{
-                                fontWeight: 800,
-                                fontSize: 14,
-                                color: 'var(--brand)',
-                                textDecoration: 'none',
-                                minHeight: 44,
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                              }}
-                            >
-                              {ticket.ticketNo}
-                            </Link>
-
-                            {overdue && (
-                              <span
-                                style={{
-                                  background: 'var(--danger-bg)',
-                                  color: 'var(--danger)',
-                                  fontSize: 11,
-                                  fontWeight: 800,
-                                  padding: '2px 8px',
-                                  borderRadius: 999,
-                                  border: '1px solid var(--danger)',
-                                }}
-                                role="status"
-                              >
-                                OVERDUE
-                              </span>
-                            )}
-                          </div>
-
-                          <div style={{ fontSize: 13, color: 'var(--heading)', fontWeight: 600 }}>
-                            {ticket.device?.brand} {ticket.device?.model}
-                          </div>
-
-                          <div style={{ fontSize: 12, color: 'var(--secondary)' }}>
-                            Customer: {ticket.customerId?.name || 'Walk-in'}
-                          </div>
-
-                          <p
-                            style={{
-                              fontSize: 12,
-                              color: 'var(--body)',
-                              background: 'var(--bg)',
-                              padding: '6px 8px',
-                              borderRadius: 6,
-                              margin: 0,
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            {ticket.faultDescription}
-                          </p>
-
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--muted)' }}>
-                            <span>Tech: {ticket.technicianId?.name || 'Unassigned'}</span>
-                            {ticket.advanceCents > 0 && <span>Adv: {money(ticket.advanceCents)}</span>}
-                          </div>
-
-                          {/* Quick Stage Transition Actions */}
-                          {allowedMoves.length > 0 && (
-                            <div
-                              style={{
-                                display: 'flex',
-                                gap: 6,
-                                flexWrap: 'wrap',
-                                marginTop: 6,
-                                paddingTop: 6,
-                                borderTop: '1px solid var(--border)',
-                              }}
-                            >
-                              {allowedMoves.map((m) => (
-                                <button
-                                  key={m.to}
-                                  onClick={() => handleStageMove(ticket, m.to)}
-                                  disabled={movingTicketId === ticket._id}
-                                  style={{
-                                    border: '1px solid var(--input-border)',
-                                    background: 'var(--surface)',
-                                    color: m.to === 'Cancelled' ? 'var(--danger)' : 'var(--heading)',
-                                    borderRadius: 6,
-                                    padding: '6px 10px',
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    minHeight: 44,
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                  }}
-                                  aria-label={`Move ticket ${ticket.ticketNo} to ${m.to}`}
-                                >
-                                  {movingTicketId === ticket._id ? 'Moving...' : m.label}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
+                  <p style={{ margin: 0, fontWeight: 600 }}>No tickets in {activeMobileStage}</p>
+                  <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--muted)' }}>
+                    Select another stage above or create a new ticket.
+                  </p>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              ) : (
+                (board[activeMobileStage]?.items || []).map((ticket) =>
+                  renderTicketCard(ticket, activeMobileStage)
+                )
+              )}
+            </div>
+          </div>
+        </>
       )}
     </Shell>
   );

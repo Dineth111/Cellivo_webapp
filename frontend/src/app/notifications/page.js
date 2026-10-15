@@ -185,6 +185,21 @@ export default function NotificationsPage() {
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', paddingBottom: 60 }}>
+      <style>{`
+        .notifications-table-desktop { display: block; }
+        .notifications-cards-mobile { display: none; }
+        .notifications-templates-layout {
+          display: grid;
+          grid-template-columns: 320px 1fr;
+          gap: 24px;
+        }
+        @media (max-width: 768px) {
+          .notifications-table-desktop { display: none !important; }
+          .notifications-cards-mobile { display: flex !important; flex-direction: column; gap: 12px; }
+          .notifications-templates-layout { grid-template-columns: 1fr !important; }
+        }
+      `}</style>
+
       <AppHeader chip="Notifications">
         <Link
           href="/"
@@ -222,7 +237,7 @@ export default function NotificationsPage() {
         )}
 
         {/* Tab navigation: touch targets at least 44x44px */}
-        <div style={{ display: 'flex', gap: 12, marginTop: 24, marginBottom: 20 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 24, marginBottom: 20 }}>
           <Button
             type="button"
             variant={tab === 'templates' ? undefined : 'secondary'}
@@ -245,7 +260,7 @@ export default function NotificationsPage() {
         </div>
 
         {tab === 'templates' ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24 }}>
+          <div className="notifications-templates-layout">
             {/* Template list */}
             <Card title="Available Templates">
               <div style={{ maxHeight: 600, overflowY: 'auto' }}>
@@ -401,55 +416,119 @@ export default function NotificationsPage() {
               </Button>
             </form>
 
-            <Table head={['Recipient', 'Channel', 'Event', 'Status', 'Parts / Credits', 'Date', 'Action']}>
+            <div className="notifications-table-desktop">
+              <Table head={['Recipient', 'Channel', 'Event', 'Status', 'Parts / Credits', 'Date', 'Action']}>
+                {logs.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                      No delivery logs found.
+                    </td>
+                  </tr>
+                ) : (
+                  logs.map((l) => (
+                    <tr key={l._id}>
+                      <td>
+                        <code>{l.recipient}</code>
+                      </td>
+                      <td>{l.channel?.toUpperCase()}</td>
+                      <td>{l.event || l.template}</td>
+                      <td>
+                        {/* Status as text not colour only */}
+                        <Badge tone={badgeToneForStatus(l.status)}>
+                          {l.status?.toUpperCase()}
+                        </Badge>
+                        {l.errorReason && (
+                          <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2 }}>
+                            {l.errorReason}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {l.channel === 'sms'
+                          ? `${l.partsCount || 1} part(s) (${l.creditsDeducted || 0} cr)`
+                          : '-'}
+                      </td>
+                      <td>{date(l.createdAt)}</td>
+                      <td>
+                        {l.status === 'failed' && (
+                          <Button
+                            variant="secondary"
+                            type="button"
+                            disabled={resendingId === l._id}
+                            onClick={() => handleResend(l._id)}
+                            style={{ minHeight: 36, padding: '0 12px', fontSize: 12 }}
+                          >
+                            {resendingId === l._id ? 'Retrying…' : 'Resend'}
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </Table>
+            </div>
+
+            <div className="notifications-cards-mobile">
               {logs.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
-                    No delivery logs found.
-                  </td>
-                </tr>
+                <div style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>
+                  No delivery logs found.
+                </div>
               ) : (
                 logs.map((l) => (
-                  <tr key={l._id}>
-                    <td>
-                      <code>{l.recipient}</code>
-                    </td>
-                    <td>{l.channel?.toUpperCase()}</td>
-                    <td>{l.event || l.template}</td>
-                    <td>
-                      {/* Status as text not colour only */}
+                  <div
+                    key={l._id}
+                    style={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 12,
+                      padding: 14,
+                      display: 'grid',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      <code style={{ fontSize: 13, fontWeight: 700 }}>{l.recipient}</code>
                       <Badge tone={badgeToneForStatus(l.status)}>
                         {l.status?.toUpperCase()}
                       </Badge>
-                      {l.errorReason && (
-                        <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 2 }}>
-                          {l.errorReason}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {l.channel === 'sms'
-                        ? `${l.partsCount || 1} part(s) (${l.creditsDeducted || 0} cr)`
-                        : '-'}
-                    </td>
-                    <td>{date(l.createdAt)}</td>
-                    <td>
-                      {l.status === 'failed' && (
-                        <Button
-                          variant="secondary"
-                          type="button"
-                          disabled={resendingId === l._id}
-                          onClick={() => handleResend(l._id)}
-                          style={{ minHeight: 36, padding: '0 12px', fontSize: 12 }}
-                        >
-                          {resendingId === l._id ? 'Retrying…' : 'Resend'}
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--secondary)' }}>
+                      <span>Channel: <strong>{l.channel?.toUpperCase()}</strong></span>
+                      <span>{date(l.createdAt)}</span>
+                    </div>
+
+                    <div style={{ fontSize: 13, color: 'var(--heading)' }}>
+                      Event: <strong>{l.event || l.template}</strong>
+                    </div>
+
+                    {l.channel === 'sms' && (
+                      <div style={{ fontSize: 12, color: 'var(--secondary)' }}>
+                        {l.partsCount || 1} part(s) · {l.creditsDeducted || 0} credits
+                      </div>
+                    )}
+
+                    {l.errorReason && (
+                      <div style={{ fontSize: 12, color: 'var(--danger)', background: '#fee2e2', padding: '6px 10px', borderRadius: 6 }}>
+                        {l.errorReason}
+                      </div>
+                    )}
+
+                    {l.status === 'failed' && (
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        disabled={resendingId === l._id}
+                        onClick={() => handleResend(l._id)}
+                        style={{ minHeight: 44, width: '100%', marginTop: 4 }}
+                      >
+                        {resendingId === l._id ? 'Retrying…' : 'Resend Notification'}
+                      </Button>
+                    )}
+                  </div>
                 ))
               )}
-            </Table>
+            </div>
           </Card>
         )}
       </main>

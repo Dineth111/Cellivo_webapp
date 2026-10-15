@@ -76,12 +76,23 @@ export default function DashboardOverview({ user }) {
 
   return (
     <>
+      <style>{`
+        @media (max-width: 480px) {
+          .${styles.stats} {
+            grid-template-columns: 1fr !important;
+          }
+          .${styles.glassRow} {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      `}</style>
+
       <section className={styles.hero}>
         <div>
           <span className={styles.badgeDark}>{today()}</span>
           <h2>{greeting()}, {firstName}</h2>
           <p>Overview of sales, repairs, inventory stock, and receivables.</p>
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, marginBottom: 16 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 16 }}>
             {[
               ['today', 'Today'],
               ['this_week', 'This Week'],
@@ -92,15 +103,18 @@ export default function DashboardOverview({ user }) {
                 type="button"
                 onClick={() => handlePeriodChange(key)}
                 style={{
-                  padding: '6px 14px',
+                  minHeight: 44,
+                  padding: '8px 16px',
                   borderRadius: 999,
                   border: '1px solid',
                   borderColor: period === key ? '#fff' : 'rgba(255, 255, 255, 0.35)',
                   background: period === key ? 'rgba(255, 255, 255, 0.25)' : 'transparent',
                   color: '#fff',
-                  fontSize: 12,
+                  fontSize: 13,
                   fontWeight: 700,
                   cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
                 }}
               >
                 {label}
@@ -108,9 +122,9 @@ export default function DashboardOverview({ user }) {
             ))}
           </div>
           <div className={styles.heroActions}>
-            <Link className={styles.primary} href="/pos">+ New Sale</Link>
-            <Link className={styles.outlineDark} href="/repairs/new">+ New Repair</Link>
-            <Link className={styles.outlineDark} href="/inventory">+ Add Stock</Link>
+            <Link className={styles.primary} href="/pos" style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>+ New Sale</Link>
+            <Link className={styles.outlineDark} href="/repairs/new" style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>+ New Repair</Link>
+            <Link className={styles.outlineDark} href="/inventory" style={{ minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>+ Add Stock</Link>
           </div>
         </div>
         <div className={styles.glassRow}>
