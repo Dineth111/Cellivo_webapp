@@ -150,6 +150,7 @@ export async function getDashboardData({
       tenantId: tId,
       isArchived: false,
       reorderLevel: { $gt: 0 },
+      trackStock: { $ne: false },
     };
 
     const lowStockAgg = await Product.aggregate([
@@ -189,12 +190,12 @@ export async function getDashboardData({
     lowStockCount = lowStockAgg[0]?.count || 0;
   }
 
-  // 4. Pending customer receivables (unpaid invoice balances only)
+  // 4. Pending customer receivables (unpaid invoice balances only, settled statuses)
   let receivables = null;
   if (canViewReceivables) {
     const receivablesMatch = {
       tenantId: tId,
-      status: { $ne: 'voided' },
+      status: { $in: ['completed', 'partially_returned'] },
       paymentStatus: { $in: ['unpaid', 'partially_paid', 'overdue'] },
     };
     if (bId) receivablesMatch.branchId = bId;

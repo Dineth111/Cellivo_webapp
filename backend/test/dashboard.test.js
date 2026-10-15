@@ -126,6 +126,21 @@ describe('F-05 Dashboard API', () => {
       });
       await inv2.save();
 
+      // Draft invoice with unpaid balance: 40,000 cents -> must NOT be counted in receivables
+      const invDraft = new Invoice({
+        tenantId,
+        branchId,
+        invoiceNumber: 'INV-DRAFT-01',
+        status: 'draft',
+        paymentStatus: 'unpaid',
+        customerId,
+        subtotalCents: 40000,
+        grandTotalCents: 40000,
+        totalPaidCents: 0,
+        lines: [{ name: 'Draft Item', qty: 1, unitPriceCents: 40000, grossCents: 40000, netCents: 40000, lineTotalCents: 40000 }],
+      });
+      await invDraft.save();
+
       // Terminal repair ticket (Delivered): should NOT count toward active repairs
       const tDelivered = new RepairTicket({
         tenantId,
@@ -174,6 +189,36 @@ describe('F-05 Dashboard API', () => {
         qty: 10,
       });
       await slOk.save();
+
+      // Service product: reorderLevel 0, stock 0 => does NOT track stock, must NOT count in low stock
+      const prodService = new Product({
+        tenantId,
+        name: 'Service Labour Charge',
+        barcode: 'SRV-LABOUR-01',
+        sellingPriceCents: 200000,
+        reorderLevel: 0,
+      });
+      await prodService.save();
+
+      // Product with trackStock: false in database => must NOT count in low stock even if qty is 0
+      const prodNoTrack = {
+        tenantId,
+        name: 'Non Tracked Accessory',
+        barcode: 'NON-TRACK-01',
+        sellingPriceCents: 50000,
+        reorderLevel: 5,
+        trackStock: false,
+        isArchived: false,
+      };
+      await Product.collection.insertOne(prodNoTrack);
+
+      const slNoTrack = new StockLevel({
+        tenantId,
+        productId: prodNoTrack._id,
+        branchId,
+        qty: 0,
+      });
+      await slNoTrack.save();
     });
 
     // Active repair ticket via API: Received
@@ -390,6 +435,83 @@ describe('F-05 Dashboard API', () => {
     // Owner filtering by b2: 350,000
     const ownerB2 = await api('get', `/api/dashboard?branchId=${b2}`, owner.token);
     expect(ownerB2.body.data.sales.totalCents).toBe(350000);
+
+    // Create staff without view_all_branches
+    let noBranchToken;
+    let b1OnlyToken;
+    let multiBranchToken;
+
+    await runWithContext({ tenantId }, async () => {
+      const branchStaffRole = new Role({
+        tenantId,
+        name: 'Branch Limited Staff Role',
+        key: 'branch_staff_role',
+        grid: { dashboard: { view: true }, pos: { view: true } },
+        special: { view_all_branches: false },
+      });
+      await branchStaffRole.save();
+
+      // (a) User with no branches assigned (empty array)
+      const uNoBranch = new User({
+        tenantId,
+        branchIds: [],
+        name: 'Orphan Staff',
+        email: 'orphan@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await User.collection.insertOne(uNoBranch.toObject());
+      noBranchToken = (await createSession(uNoBranch)).token;
+
+      // (b) User with only branch b1 assigned
+      const uB1 = new User({
+        tenantId,
+        branchIds: [b1],
+        name: 'B1 Staff Member',
+        email: 'b1only@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await uB1.save();
+      b1OnlyToken = (await createSession(uB1)).token;
+
+      // (c) User with multiple branches assigned [b1, b2]
+      const uMulti = new User({
+        tenantId,
+        branchIds: [b1, b2],
+        name: 'Multi Branch Staff Member',
+        email: 'multiroam@cellivo.lk',
+        passwordHash: 'dummy',
+        roleId: branchStaffRole._id,
+        isActive: true,
+      });
+      await uMulti.save();
+      multiBranchToken = (await createSession(uMulti)).token;
+    });
+
+    // (a) User without view_all_branches and no branch assigned gets 403
+    const noBranchRes = await api('get', '/api/dashboard', noBranchToken);
+    expect(noBranchRes.status).toBe(403);
+
+    // (b) User requesting another branch not in their branchIds gets 403
+    const forbiddenBranchRes = await api('get', `/api/dashboard?branchId=${b2}`, b1OnlyToken);
+    expect(forbiddenBranchRes.status).toBe(403);
+
+    // User requesting their assigned branch b1 gets 200 with b1 metrics
+    const b1Res = await api('get', `/api/dashboard?branchId=${b1}`, b1OnlyToken);
+    expect(b1Res.status).toBe(200);
+    expect(b1Res.body.data.sales.totalCents).toBe(150000);
+
+    // (c) Multi-branch user can pick branch b1 or b2
+    const multiB1 = await api('get', `/api/dashboard?branchId=${b1}`, multiBranchToken);
+    expect(multiB1.status).toBe(200);
+    expect(multiB1.body.data.sales.totalCents).toBe(150000);
+
+    const multiB2 = await api('get', `/api/dashboard?branchId=${b2}`, multiBranchToken);
+    expect(multiB2.status).toBe(200);
+    expect(multiB2.body.data.sales.totalCents).toBe(350000);
   });
 
   it('7. returns zeros and empty lists for empty tenant', async () => {

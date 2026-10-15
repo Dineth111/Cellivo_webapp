@@ -138,6 +138,11 @@ This document tracks cross-module questions, architectural assumptions, and revi
    - In `backend/src/app.js`, `app.set('trust proxy', config.trustProxy)` is only invoked when `config.trustProxy` is non-zero (defaults to 0). On Vercel / reverse proxies, if `TRUST_PROXY` is not enabled, `req.ip` resolves to the internal edge/proxy IP rather than the true client IP, which would cause all public status visitors through that proxy to share a single IP rate-limit bucket. Dev 1 should configure `TRUST_PROXY=1` in serverless production environments.
    - The rate limiter uses a shared MongoDB TTL collection (`public_rate_limits`) for distributed counters (60 req/15 min per IP; 10 failed manual attempts/15 min per ticket). Note that the in-memory fallback store is per-instance on serverless (degraded mode if DB is disconnected). If Dev 1 prefers an Upstash Redis store or Edge Middleware rate limiting in production, please advise.
 
+### For Dev 2
+
+61. **Dashboard UI refactoring (frontend/src/app/page.js & frontend/src/components/dashboard/DashboardOverview.js).**
+    The dashboard overview UI, hero stats, period toggles, overdue repairs panel, and activity feed were extracted from `page.js` into a dedicated, reusable `DashboardOverview.js` component to keep `page.js` minimal and clean.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
