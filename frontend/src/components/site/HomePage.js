@@ -51,7 +51,7 @@ export default function HomePage() {
             <h1>The POS built exclusively for phone shops</h1>
             <p>Run billing, IMEI stock, repairs and reports from one dashboard. Set up in minutes, from any device.</p>
             <div className={styles.ctaRow}>
-              <Link href="/pricing" className={styles.btnLight}>Start Free Trial</Link>
+              <Link href="/pricing" className={styles.btn}>Start Free Trial</Link>
               <Link href="/contact" className={styles.btnGhost}>Book Live Demo</Link>
             </div>
             <ul className={styles.trust}>
