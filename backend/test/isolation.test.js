@@ -23,6 +23,10 @@ import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
 import LoyaltySettings from '../src/modules/customers/LoyaltySettings.model.js';
+
+import NotificationTemplate from '../src/modules/notifications/models/NotificationTemplate.model.js';
+import NotificationLog from '../src/modules/notifications/models/NotificationLog.model.js';
+import InAppNotification from '../src/modules/notifications/models/InAppNotification.model.js';
 import Category from '../src/modules/inventory/models/Category.model.js';
 import Brand from '../src/modules/inventory/models/Brand.model.js';
 import ProductModel from '../src/modules/inventory/models/ProductModel.model.js';
@@ -69,6 +73,10 @@ const MODELS = {
   Expense,
   LoyaltyTransaction,
   LoyaltySettings,
+
+  NotificationTemplate,
+  NotificationLog,
+  InAppNotification,
   Category,
   Brand,
   ProductModel,

@@ -86,6 +86,15 @@ Each item states the safe default that was implemented. Confirm or change.
    `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.
    After that run, `phoneVariants` is still used defensively but should no longer find mismatches.
 
+## Notifications review (Dev 5)
+
+29. **Pre-tenant emails.** Sign-up verification codes (`signup.service.js`) go directly to the email provider without writing a `NotificationLog` document, because every tenant model requires a `tenantId`. Confirm whether platform-level notification logs should be introduced in a separate collection.
+30. **Permissions for notifications.** `'notifications'` is not in `core/permissions.js` `MODULES`. Notification templates and delivery logs are currently guarded by `settings.view` and `settings.edit`. Confirm if Dev 1 should add `notifications` as a distinct module in `MODULES`.
+31. **Lockout notice to owner.** FRS F-03 lockout alert (line 45 in `auth.service.js`) remains unwired for Phase 1.
+32. **Platform events.** `new_lead`, `demo_booking`, and `system_threshold_breach` templates are provided in defaults, but triggers are not wired yet.
+33. **Serverless queue worker trigger.** `backend/api/index.js` suggests a serverless deployment where `server.js` intervals do not run; the notification queue needs a scheduled trigger if so.
+34. **In-app broadcast read state.** In-app notifications with `userId: null` share one read state across all users.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.

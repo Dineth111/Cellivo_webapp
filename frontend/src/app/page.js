@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { checkHealth, clearSession, getAuthProfile, hasSession, loginUser, logoutUser, registerUser, saveSession } from '../lib/api';
+import NotificationBell from '../components/NotificationBell';
 import styles from './page.module.css';
 
 // Sidebar menu (SRS 4.1 / Figure 10.6)
@@ -222,6 +223,7 @@ function Dashboard({ user, onLogout }) {
             <h1 className={styles.pageTitle}>{page}</h1>
           </div>
           <div className={styles.topActions}>
+            <NotificationBell />
             <span className={styles.pill}>Main Branch</span>
             <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}

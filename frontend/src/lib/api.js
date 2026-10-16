@@ -200,3 +200,13 @@ export async function importCustomersCsv(csvText) {
   return data;
 }
 
+// ---- Notifications (F-18 Dev 5) ----------------------------------------------------------------
+export const getNotificationTemplates = () => authFetch('/notifications/templates');
+export const updateNotificationTemplate = (event, channel, body) =>
+  authFetch(`/notifications/templates/${event}/${channel}`, { method: 'PUT', body: JSON.stringify(body) });
+export const getNotificationLogs = (query = '') => authFetch(`/notifications/logs${query ? `?${query}` : ''}`);
+export const resendNotificationLog = (id) => authFetch(`/notifications/logs/${id}/resend`, { method: 'POST' });
+export const getInAppNotifications = (query = '') => authFetch(`/notifications/in-app${query ? `?${query}` : ''}`);
+export const markInAppNotificationRead = (id) => authFetch(`/notifications/in-app/${id}/read`, { method: 'PATCH' });
+export const markAllInAppNotificationsRead = () => authFetch('/notifications/in-app/read-all', { method: 'POST' });
+
