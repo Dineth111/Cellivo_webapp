@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { checkHealth, clearSession, getAuthProfile, hasSession, loginUser, logoutUser, registerUser, saveSession } from '../lib/api';
+import { checkHealth, clearSession, getAuthProfile, hasSession, logoutUser } from '../lib/api';
+import HomePage from '../components/site/HomePage';
 import NotificationBell from '../components/NotificationBell';
 import DashboardOverview from '../components/dashboard/DashboardOverview';
 import styles from './page.module.css';
@@ -43,7 +44,8 @@ export default function Home() {
     );
   }
 
-  if (!user) return <Login onLogin={setUser} />;
+  // Guests see the public marketing site; log in at /login.
+  if (!user) return <HomePage />;
 
   return (
     <Dashboard
@@ -53,120 +55,6 @@ export default function Home() {
         setUser(null);
       }}
     />
-  );
-}
-
-function Login({ onLogin }) {
-  const [mode, setMode] = useState('login');
-  const [form, setForm] = useState({ name: '', shopName: '', email: '', phone: '', password: '', remember: true });
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const isLogin = mode === 'login';
-  const set = (field) => (e) => setForm({ ...form, [field]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
-
-  const submit = async (e) => {
-    e.preventDefault();
-    setError('');
-    setSubmitting(true);
-    try {
-      const res = isLogin ? await loginUser(form) : await registerUser(form);
-      saveSession(res, isLogin ? form.remember : true);
-      onLogin(res.user);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const switchMode = () => {
-    setMode(isLogin ? 'register' : 'login');
-    setError('');
-  };
-
-  return (
-    <main className={styles.authShell}>
-      <section className={styles.authHero}>
-        <span className={styles.badgeDark}>Mobile shop POS</span>
-        <div>
-          <h1>Run billing, IMEI stock and repairs from one dashboard.</h1>
-          <p>Works on desktop, tablet and mobile. No IT setup needed.</p>
-        </div>
-        <div className={styles.glassRow}>
-          <div className={styles.glass}>
-            <span className={styles.labelDark}>Today&apos;s sales</span>
-            <strong>Rs 1,245,000</strong>
-          </div>
-          <div className={styles.glass}>
-            <span className={styles.labelDark}>Repairs ready</span>
-            <strong>3</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className={styles.authPanel}>
-        <form className={styles.authForm} onSubmit={submit}>
-          <span className={styles.logo}>CELLIVO</span>
-          <div>
-            <h2>{isLogin ? 'Welcome back' : 'Create your Cellivo account'}</h2>
-            <p className={styles.caption}>
-              {isLogin ? 'Log in to your shop account' : 'No credit card required · Cancel anytime'}
-            </p>
-          </div>
-
-          {error && <div className={styles.error} role="alert">{error}</div>}
-
-          {!isLogin && (
-            <>
-              <label>
-                Full name
-                <input value={form.name} onChange={set('name')} placeholder="Nimal Perera" required />
-              </label>
-              <label>
-                Shop name
-                <input value={form.shopName} onChange={set('shopName')} placeholder="Nimal Mobile" required />
-              </label>
-              <label>
-                Mobile number
-                <input type="tel" value={form.phone} onChange={set('phone')} placeholder="+94 77 123 4567" />
-              </label>
-            </>
-          )}
-          <label>
-            Email
-            <input type="email" value={form.email} onChange={set('email')} placeholder="you@shop.com" autoComplete="email" required />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={form.password}
-              onChange={set('password')}
-              {...(!isLogin && { minLength: 8, pattern: '(?=.*[A-Za-z])(?=.*[0-9]).{8,}', title: 'At least 8 characters, with a letter and a number' })}
-              autoComplete={isLogin ? 'current-password' : 'new-password'}
-              required
-            />
-            {!isLogin && <span className={styles.caption}>At least 8 characters, with a letter and a number.</span>}
-          </label>
-
-          {isLogin && (
-            <label className={styles.checkbox}>
-              <input type="checkbox" checked={form.remember} onChange={set('remember')} />
-              Remember this device
-            </label>
-          )}
-
-          <button className={styles.primary} disabled={submitting}>
-            {submitting ? 'Please wait…' : isLogin ? 'Log in' : 'Create account'}
-          </button>
-
-          <p className={styles.switch}>
-            {isLogin ? 'New to Cellivo? ' : 'Already have an account? '}
-            {isLogin ? <Link href="/signup">Start free trial</Link> : <button type="button" onClick={switchMode}>Log in</button>}
-          </p>
-        </form>
-      </section>
-    </main>
   );
 }
 

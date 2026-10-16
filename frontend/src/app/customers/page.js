@@ -287,7 +287,7 @@ export default function CustomersPage() {
     return (
       <Shell>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to view and manage customers.
+          Please <Link href="/login">log in</Link> to view and manage customers.
         </Alert>
       </Shell>
     );

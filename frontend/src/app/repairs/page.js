@@ -180,7 +180,7 @@ export default function RepairsBoardPage() {
     return (
       <Shell>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to view and manage repairs.
+          Please <Link href="/login">log in</Link> to view and manage repairs.
         </Alert>
       </Shell>
     );

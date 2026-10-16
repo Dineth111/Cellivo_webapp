@@ -154,7 +154,7 @@ export default function CustomerProfilePage() {
     return (
       <Shell>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to view customer profiles.
+          Please <Link href="/login">log in</Link> to view customer profiles.
         </Alert>
       </Shell>
     );

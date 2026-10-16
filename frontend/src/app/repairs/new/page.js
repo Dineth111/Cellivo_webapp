@@ -306,7 +306,7 @@ export default function NewRepairPage() {
     return (
       <Shell>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to create a repair ticket.
+          Please <Link href="/login">log in</Link> to create a repair ticket.
         </Alert>
       </Shell>
     );
