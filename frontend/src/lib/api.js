@@ -81,7 +81,13 @@ export async function authFetch(path, options = {}) {
   let res = await send((findStore() || localStorage).getItem(ACCESS_KEY));
   if (res.status === 401) res = await send(await refreshAccessToken());
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || 'Request failed.');
+  if (!res.ok) {
+    const err = new Error(data.message || 'Request failed.');
+    err.code = data.code;
+    err.data = data.data;
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -134,3 +140,63 @@ export async function downloadInvoice(inv) {
   Object.assign(document.createElement('a'), { href: url, download: `${inv.number}.pdf` }).click();
   URL.revokeObjectURL(url);
 }
+
+// ---- Customers (F-13) ---------------------------------------------------------------------------
+export const getCustomers = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([_, v]) => v !== undefined && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return authFetch(`/customers${qs ? `?${qs}` : ''}`);
+};
+
+export const getCustomer = (id) => authFetch(`/customers/${id}`);
+
+export const createCustomer = (data) =>
+  authFetch('/customers', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateCustomer = (id, data) =>
+  authFetch(`/customers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const deleteCustomer = (id) =>
+  authFetch(`/customers/${id}`, { method: 'DELETE' });
+
+export const getCustomerDuplicates = () =>
+  authFetch('/customers/duplicates');
+
+export const mergeCustomers = (sourceId, targetId) =>
+  authFetch(`/customers/${sourceId}/merge`, { method: 'POST', body: JSON.stringify({ intoId: targetId }) });
+
+export const getCustomerHistory = (id, params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([_, v]) => v !== undefined && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return authFetch(`/customers/${id}/history${qs ? `?${qs}` : ''}`);
+};
+
+export const getLoyaltySettings = () =>
+  authFetch('/customers/loyalty-settings');
+
+export const updateLoyaltySettings = (data) =>
+  authFetch('/customers/loyalty-settings', { method: 'PUT', body: JSON.stringify(data) });
+
+export async function importCustomersCsv(csvText) {
+  const send = (token) =>
+    fetch(`${API_BASE}/customers/import`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/csv',
+        Authorization: `Bearer ${token}`,
+      },
+      body: csvText,
+    });
+  let res = await send((findStore() || localStorage).getItem(ACCESS_KEY));
+  if (res.status === 401) res = await send(await refreshAccessToken());
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || 'CSV Import failed.');
+    err.code = data.code;
+    err.data = data.data;
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+

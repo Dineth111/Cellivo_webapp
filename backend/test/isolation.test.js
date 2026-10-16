@@ -22,6 +22,7 @@ import BankAccount from '../src/modules/pos/models/BankAccount.model.js';
 import Cheque from '../src/modules/pos/models/Cheque.model.js';
 import Expense from '../src/modules/pos/models/Expense.model.js';
 import LoyaltyTransaction from '../src/modules/pos/models/LoyaltyTransaction.model.js';
+import LoyaltySettings from '../src/modules/customers/LoyaltySettings.model.js';
 import Category from '../src/modules/inventory/models/Category.model.js';
 import Brand from '../src/modules/inventory/models/Brand.model.js';
 import ProductModel from '../src/modules/inventory/models/ProductModel.model.js';
@@ -67,6 +68,7 @@ const MODELS = {
   Cheque,
   Expense,
   LoyaltyTransaction,
+  LoyaltySettings,
   Category,
   Brand,
   ProductModel,
@@ -175,5 +177,33 @@ describe('tenant isolation at the model layer', () => {
     expect(await asB(() => Customer.find())).toHaveLength(0);
     expect(await asB(() => User.countDocuments())).toBe(1);
     expect((await asB(() => Customer.updateMany({}, { name: 'x' }))).matchedCount).toBe(0);
+  });
+});
+
+describe('LoyaltySettings schema constraints', () => {
+  it('has exactly one index on { tenantId: 1 } and it is unique; duplicate insert throws duplicate-key error', async () => {
+    const { a } = await twoShops();
+
+    // Ensure Mongoose has synced indexes to the collection.
+    await LoyaltySettings.createIndexes();
+
+    // 1. Collection should carry exactly one index keyed on tenantId (plus _id).
+    const indexes = await LoyaltySettings.collection.indexes();
+    const tenantIdIndexes = indexes.filter(
+      (idx) => Object.keys(idx.key).length === 1 && idx.key.tenantId === 1
+    );
+    expect(tenantIdIndexes).toHaveLength(1);
+    expect(tenantIdIndexes[0].unique).toBe(true);
+
+    // 2. First document for tenant A inserts fine.
+    await runWithContext({ tenantId: a.tenantId }, async () => {
+      await LoyaltySettings.create({ pointsPerHundredRupees: 2 });
+    });
+
+    // 3. Second document for the same tenant must be rejected with a duplicate-key error.
+    const insertDup = runWithContext({ tenantId: a.tenantId }, async () => {
+      await LoyaltySettings.create({ pointsPerHundredRupees: 3 });
+    });
+    await expect(insertDup).rejects.toMatchObject({ code: 11000 });
   });
 });

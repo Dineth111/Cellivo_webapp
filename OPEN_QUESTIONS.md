@@ -47,8 +47,46 @@ Each item states the safe default that was implemented. Confirm or change.
 32. **Cash GRN with no open session:** Cash GRNs record a cash-out via `financeService.recordCashOut` using reason `GRN <documentNumber>`. If the receiving user does not have an open cash drawer session at that branch, the cash-out will be refused by `financeService`. Confirm whether cash GRNs without an open cashier shift should block receipt or allow a ledger-only fallback.
 33. **Post-commit low-stock alerts:** Low-stock threshold evaluations hook into `session.commitTransaction` and dispatch alerts only after the database transaction successfully commits, preventing phantom alerts on rolled back transactions.
 
+## Customers review (Dev 5)
+
+34. **Customer schema additions.** Added `tags` (`[String]`, max 50 chars per tag), `marketingOptIn` (`Boolean`, default `false`), and `mergedInto` (`ObjectId`, ref `Customer`, default `null`). Existing financial metrics (`creditLimitCents`, `currentBalanceCents`, `loyaltyPoints`) remain intact. Normalisation is write-only with no Mongoose getter to prevent accidental display mutations.
+35. **LoyaltySettings model & isolation.** Created tenant-scoped `LoyaltySettings` (`pointsPerHundredRupees`, `valuePerPointCents`, `minRedemptionPoints`, `expiryDays`). Enforces tenant isolation via `tenantPlugin`. In `loyaltySettings.adapter.js`, the query is safely wrapped with `runWithContext({ tenantId })` to provide safe defaults for POS functions (e.g. `calculateEarnedPoints`) invoked outside request context.
+36. **Merge reference reassignment.** Merge is atomic within a MongoDB transaction session and owner-only. Reassigns `Invoice`, `CreditNote`, `InstallmentPlan`, `LoyaltyTransaction`, `Quotation`, and `Cheque`. Specifically:
+   - Does NOT change `customerSnapshot` on `Invoice` documents, preserving historical customer details at time of sale.
+   - Does NOT touch `LedgerEntry` records (Dev 3's financial ledger remains an immutable double-entry log).
+   - Skips `HeldCart` (in-progress transient carts are discarded or left to expire).
+   - Self-merges, merges into archived/merged customers, circular merges, and cross-tenant merges are rejected with 400 or 404.
+37. **Customer history scope.**
+   `GET /api/customers/:id/history` returns invoices, payments, returns / credit notes, installment plans and loyalty transactions.
+   Repairs (my Phase 3) and devices owned (Dev 4 inventory) return empty arrays until those modules exist.
+   Cost prices on invoice lines are masked through `maskCostMargins` unless the caller has the `view_cost_margin` special permission.
+
+### For Dev 3
+
+38. **`reassign.adapter.js` (customers/adapters) is marked TEMP.**
+   During a customer merge it writes `customerId` on Invoice, CreditNote, InstallmentPlan, LoyaltyTransaction, Quotation and Cheque inside the merge transaction session.
+   It does NOT touch `customerSnapshot` or `LedgerEntry`.
+   Dev 3 should either approve this adapter or take ownership of the function.
+
+39. **`completeSale` retry counter mismatch and flaky POS concurrency test.**
+   In `pos/services/sale.service.js`, the while loop condition is `while (attempts < 5)` at line 373, but the transient error catch block checks `attempts < 10` at line 553. When transient errors occur under parallel load, `attempts` can reach 5, causing the loop to exit without assigning `createdInvoice` and leading to `TypeError: Cannot read properties of undefined (reading '_id')` at `sale.service.js:562` (HTTP 500).
+   This causes `test/pos.test.js` ("guarantees atomic concurrency and gapless sequential numbering") to fail intermittently with a 500 status on `origin/main` (and feature branches). Dev 3 / Dev 4 should align the loop condition with the retry limit.
+
+### For Dev 1
+
+40. **`LoyaltySettings` unique-tenantId index.**
+   `LoyaltySettings` makes `tenantId` unique with `schema.path('tenantId')._index = { unique: true }` (private Mongoose field).
+   This is necessary because `tenantPlugin` already registers a non-unique `tenantId_1` index via `index: true` on the path, and calling `schema.index({ tenantId: 1 }, { unique: true })` would create a second index definition under the same auto-generated name, causing a MongoDB `createIndex` error at startup.
+   Suggest `tenantPlugin` accepts a `{ unique: true }` option so one-per-tenant models do not need the private API.
+   An isolation test (`isolation.test.js`, "LoyaltySettings schema constraints") guards the index — it asserts exactly one `{ tenantId: 1 }` index exists, it is unique, and a duplicate insert is rejected with `code 11000`.
+
+41. **Existing phone data and E.164 migration.**
+   All new writes store phones in E.164 format (`+94771234567`).
+   Reads (duplicate check, search, CSV import) use `phoneVariants()` to match legacy formats still in the database (e.g. `0771234567`, `94771234567`).
+   `npm run normalize-phones` is a one-off script (dry-run by default, `--apply` to commit) that should be run once per environment before go-live to convert all stored phones to E.164.
+   After that run, `phoneVariants` is still used defensively but should no longer find mismatches.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
 - Confirm DocumentSequence collection indexes (`tenantId`, `branchId`, `docType`) exist in production MongoDB replica set.
-

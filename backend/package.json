@@ -9,7 +9,8 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seed.js",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "normalize-phones": "node src/scripts/normalizeCustomerPhones.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
