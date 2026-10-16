@@ -29,6 +29,7 @@ import notificationRoutes from './modules/notifications/notifications.routes.js'
 import repairRoutes from './modules/repairs/repairs.routes.js';
 import publicRepairRoutes from './modules/repairs/public.routes.js';
 import inventoryRoutes from './modules/inventory/routes/inventory.routes.js';
+import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,7 @@ export function createApp() {
       branches: '/api/branches', audit: '/api/audit', customers: '/api/customers',
       billing: '/api/billing', signup: '/api/signup', public: '/api/public', admin: '/api/admin',
       notifications: '/api/notifications', repairs: '/api/repairs', inventory: '/api/inventory',
+      dashboard: '/api/dashboard',
     },
   };
   app.get('/', (req, res) => (req.accepts(['json', 'html']) === 'html' ? res.send(landingHtml(index)) : res.json(index)));
@@ -68,6 +70,7 @@ export function createApp() {
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/repairs', repairRoutes);
   app.use('/api/public/repairs', publicRepairRoutes);
+  app.use('/api/dashboard', dashboardRoutes);
   app.use('/api/public', publicRoutes);
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
   app.use('/api/pos/ledger', posLedgerRoutes);

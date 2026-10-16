@@ -299,4 +299,13 @@ export async function getPublicRepairStatus({ token, ticketNo, publicCode, shopC
   return body.data;
 }
 
+export async function getDashboardMetrics({ period = 'today', branchId } = {}) {
+  const query = new URLSearchParams();
+  if (period) query.set('period', period);
+  if (branchId) query.set('branchId', branchId);
+  const res = await authFetch(`/dashboard?${query.toString()}`);
+  return res.data;
+}
+
+
 

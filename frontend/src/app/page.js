@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { checkHealth, clearSession, getAuthProfile, hasSession, loginUser, logoutUser, registerUser, saveSession } from '../lib/api';
 import NotificationBell from '../components/NotificationBell';
+import DashboardOverview from '../components/dashboard/DashboardOverview';
 import styles from './page.module.css';
 
 // Sidebar menu (SRS 4.1 / Figure 10.6)
@@ -173,7 +174,7 @@ function Dashboard({ user, onLogout }) {
   const [page, setPage] = useState('Dashboard');
   const [menuOpen, setMenuOpen] = useState(false);
   const [dbOnline, setDbOnline] = useState(null);
-  const firstName = titleCase(user.name.split(' ')[0]);
+  const firstName = titleCase(user.name?.split(' ')[0] || '');
 
   useEffect(() => {
     checkHealth()
@@ -238,52 +239,7 @@ function Dashboard({ user, onLogout }) {
         </header>
 
         {page === 'Dashboard' ? (
-          <>
-            <section className={styles.hero}>
-              <div>
-                <span className={styles.badgeDark}>{today()}</span>
-                <h2>{greeting()}, {firstName}</h2>
-                <p>Today&apos;s sales will show here once you make your first sale.</p>
-                <div className={styles.heroActions}>
-                  <Link className={styles.primary} href="/pos">+ New Sale</Link>
-                  <button className={styles.outlineDark} onClick={() => go('Repairs')}>+ New Repair</button>
-                  <Link className={styles.outlineDark} href="/inventory">+ Add Stock</Link>
-                </div>
-              </div>
-              <div className={styles.glassRow}>
-                <div className={styles.glass}>
-                  <span className={styles.labelDark}>Repairs ready</span>
-                  <strong>0</strong>
-                  <small>for pickup today</small>
-                </div>
-                <div className={styles.glass}>
-                  <span className={styles.labelDark}>Reorder</span>
-                  <strong>0</strong>
-                  <small>items below level</small>
-                </div>
-              </div>
-            </section>
-
-            {/* ponytail: placeholder figures until sales/inventory/repair modules exist */}
-            <section className={styles.stats}>
-              <Stat label="Today's sales" value="Rs 0" helper="No sales yet" />
-              <Stat label="Phones in stock" value="0" helper="Add stock to begin" />
-              <Stat label="Repairs pending" value="0" helper="0 ready for pickup" />
-              <Stat label="This month's profit" value="Rs 0" helper="Vs last month" />
-            </section>
-
-            <section className={styles.panels}>
-              <article className={styles.card}>
-                <h3>Revenue vs Profit</h3>
-                <p className={styles.empty}>No sales data for this period yet.</p>
-              </article>
-              <article className={styles.card}>
-                <h3>Last sales</h3>
-                <p className={styles.empty}>No invoices yet.</p>
-                <button className={styles.primary} onClick={() => go('New Sale')}>Make first sale</button>
-              </article>
-            </section>
-          </>
+          <DashboardOverview user={user} />
         ) : page === 'Inventory' ? (
           <article className={styles.card}>
             <h3>Inventory Management</h3>
@@ -321,15 +277,5 @@ function Dashboard({ user, onLogout }) {
         <button className={menuOpen ? styles.tabActive : ''} onClick={() => setMenuOpen(!menuOpen)}>More</button>
       </nav>
     </div>
-  );
-}
-
-function Stat({ label, value, helper }) {
-  return (
-    <article className={styles.card}>
-      <span className={styles.label}>{label}</span>
-      <strong className={styles.statValue}>{value}</strong>
-      <span className={styles.caption}>{helper}</span>
-    </article>
   );
 }
