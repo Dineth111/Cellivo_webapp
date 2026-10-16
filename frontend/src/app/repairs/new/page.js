@@ -777,17 +777,17 @@ export default function NewRepairPage() {
         </Card>
 
         {/* Submit Actions */}
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 10 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
           <Button
             type="submit"
             disabled={submitting}
-            style={{ minHeight: 48, padding: '0 32px', fontSize: 15 }}
+            style={{ minHeight: 48, padding: '0 24px', fontSize: 15, flex: '1 1 240px' }}
           >
             {submitting ? 'Creating Ticket...' : 'Create Ticket & Generate Job Card'}
           </Button>
 
-          <Link href="/repairs" style={{ textDecoration: 'none' }}>
-            <Button type="button" variant="secondary" style={{ minHeight: 48, padding: '0 24px' }}>
+          <Link href="/repairs" style={{ textDecoration: 'none', flex: '1 1 120px' }}>
+            <Button type="button" variant="secondary" style={{ minHeight: 48, padding: '0 24px', width: '100%' }}>
               Cancel
             </Button>
           </Link>

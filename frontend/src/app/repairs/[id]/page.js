@@ -557,7 +557,7 @@ export default function RepairTicketDetailPage() {
 
   return (
     <Shell user={profile?.name}>
-      {/* Printable Job Card Stylesheet */}
+      {/* Printable Job Card Stylesheet & Mobile Styles */}
       <style jsx global>{`
         @media print {
           body * {
@@ -578,6 +578,31 @@ export default function RepairTicketDetailPage() {
             background: #fff;
           }
           .no-print {
+            display: none !important;
+          }
+        }
+        @media (max-width: 640px) {
+          .repairs-parts-desktop {
+            display: none !important;
+          }
+          .repairs-parts-mobile {
+            display: grid !important;
+          }
+          .sticky-mobile-actions {
+            display: flex !important;
+          }
+          main.repairs-detail-main {
+            padding: 16px 12px 90px !important;
+          }
+        }
+        @media (min-width: 641px) {
+          .repairs-parts-desktop {
+            display: block !important;
+          }
+          .repairs-parts-mobile {
+            display: none !important;
+          }
+          .sticky-mobile-actions {
             display: none !important;
           }
         }
@@ -736,7 +761,7 @@ export default function RepairTicketDetailPage() {
       )}
 
       {/* Grid of Sections */}
-      <div className="no-print" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 18 }}>
+      <div className="no-print" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 18 }}>
         {/* Section 1: Customer & Device */}
         <Card title="Customer & Device Overview">
           <div style={{ display: 'grid', gap: 10, fontSize: 14 }}>
@@ -822,7 +847,8 @@ export default function RepairTicketDetailPage() {
         </Card>
 
         {/* Section 2: Technician & Stage Workflow */}
-        <Card title="Workflow & Stage Transitions">
+        <div id="stage-workflow-card">
+          <Card title="Workflow & Stage Transitions">
           {/* Technician Assignment */}
           <form onSubmit={handleAssignTechnician} style={{ display: 'flex', gap: 8, alignItems: 'flex-end', marginBottom: 14 }}>
             <label style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontWeight: 700, color: 'var(--label)', textTransform: 'uppercase' }}>
@@ -911,6 +937,7 @@ export default function RepairTicketDetailPage() {
             )}
           </div>
         </Card>
+      </div>
 
         {/* Section 3: Customer Approval */}
         <Card title="Estimate & Customer Approval">
@@ -977,56 +1004,132 @@ export default function RepairTicketDetailPage() {
         </Card>
 
         {/* Section 4: Parts Used */}
-        <Card title="Parts & Components">
-          <div style={{ display: 'grid', gap: 12 }}>
-            <Table head={['Part Name', 'Type', 'Qty', 'Unit Price', 'Total', ...(canViewCostMargin ? ['Cost'] : []), 'Action']}>
-              {(ticket.parts || []).length === 0 ? (
-                <tr>
-                  <td colSpan={canViewCostMargin ? 7 : 6} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>
+        <div id="parts-section-card">
+          <Card title="Parts & Components">
+            <div style={{ display: 'grid', gap: 12 }}>
+              {/* Desktop Table View */}
+              <div className="repairs-parts-desktop">
+                <Table head={['Part Name', 'Type', 'Qty', 'Unit Price', 'Total', ...(canViewCostMargin ? ['Cost'] : []), 'Action']}>
+                  {(ticket.parts || []).length === 0 ? (
+                    <tr>
+                      <td colSpan={canViewCostMargin ? 7 : 6} style={{ textAlign: 'center', color: 'var(--muted)', padding: 14 }}>
+                        No parts added yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    ticket.parts.map((p) => (
+                      <tr key={p._id}>
+                        <td>
+                          <strong>{p.name}</strong>
+                          {p.sku && <div style={{ fontSize: 11, color: 'var(--muted)' }}>SKU: {p.sku}</div>}
+                        </td>
+                        <td>
+                          <Badge tone={p.inventoryManaged ? 'success' : 'neutral'}>
+                            {p.inventoryManaged ? 'Inventory' : 'Custom'}
+                          </Badge>
+                        </td>
+                        <td>{p.qty}</td>
+                        <td>{money(p.unitPriceCents || 0)}</td>
+                        <td>{money((p.qty || 1) * (p.unitPriceCents || 0))}</td>
+                        {canViewCostMargin && <td>{money(p.unitCostCents || 0)}</td>}
+                        <td>
+                          {!ticket.isInvoiceSettled && !isTerminal && canEdit && !(ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePart(p._id, p.name)}
+                              disabled={removingPartId === p._id}
+                              style={{
+                                background: 'transparent',
+                                border: 0,
+                                color: 'var(--danger)',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                minHeight: 44,
+                                minWidth: 44,
+                              }}
+                              aria-label={`Remove part ${p.name}`}
+                            >
+                              {removingPartId === p._id ? 'Removing...' : 'Delete'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </Table>
+              </div>
+
+              {/* Mobile Card List View */}
+              <div className="repairs-parts-mobile" style={{ display: 'none', gap: 10 }}>
+                {(ticket.parts || []).length === 0 ? (
+                  <div style={{ textAlign: 'center', color: 'var(--muted)', padding: '16px 8px', fontSize: 13, background: 'var(--bg, #f8fafc)', borderRadius: 8 }}>
                     No parts added yet.
-                  </td>
-                </tr>
-              ) : (
-                ticket.parts.map((p) => (
-                  <tr key={p._id}>
-                    <td>
-                      <strong>{p.name}</strong>
-                      {p.sku && <div style={{ fontSize: 11, color: 'var(--muted)' }}>SKU: {p.sku}</div>}
-                    </td>
-                    <td>
-                      <Badge tone={p.inventoryManaged ? 'success' : 'neutral'}>
-                        {p.inventoryManaged ? 'Inventory' : 'Custom'}
-                      </Badge>
-                    </td>
-                    <td>{p.qty}</td>
-                    <td>{money(p.unitPriceCents || 0)}</td>
-                    <td>{money((p.qty || 1) * (p.unitPriceCents || 0))}</td>
-                    {canViewCostMargin && <td>{money(p.unitCostCents || 0)}</td>}
-                    <td>
-                      {!ticket.isInvoiceSettled && !isTerminal && canEdit && !(ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemovePart(p._id, p.name)}
-                          disabled={removingPartId === p._id}
-                          style={{
-                            background: 'transparent',
-                            border: 0,
-                            color: 'var(--danger)',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            minHeight: 44,
-                            minWidth: 44,
-                          }}
-                          aria-label={`Remove part ${p.name}`}
-                        >
-                          {removingPartId === p._id ? 'Removing...' : 'Delete'}
-                        </button>
+                  </div>
+                ) : (
+                  ticket.parts.map((p) => (
+                    <div
+                      key={p._id}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 10,
+                        padding: 12,
+                        background: 'var(--surface)',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                        <div>
+                          <strong style={{ fontSize: 14 }}>{p.name}</strong>
+                          {p.sku && <div style={{ fontSize: 11, color: 'var(--muted)' }}>SKU: {p.sku}</div>}
+                        </div>
+                        <Badge tone={p.inventoryManaged ? 'success' : 'neutral'}>
+                          {p.inventoryManaged ? 'Inventory' : 'Custom'}
+                        </Badge>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 13, borderTop: '1px solid var(--border)', paddingTop: 6 }}>
+                        <span style={{ color: 'var(--secondary)' }}>
+                          Qty: <strong>{p.qty}</strong> × {money(p.unitPriceCents || 0)}
+                        </span>
+                        <strong style={{ fontSize: 14, color: 'var(--heading)' }}>
+                          {money((p.qty || 1) * (p.unitPriceCents || 0))}
+                        </strong>
+                      </div>
+
+                      {canViewCostMargin && (
+                        <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                          Unit Cost: {money(p.unitCostCents || 0)}
+                        </div>
                       )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </Table>
+
+                      {!ticket.isInvoiceSettled && !isTerminal && canEdit && !(ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePart(p._id, p.name)}
+                            disabled={removingPartId === p._id}
+                            style={{
+                              background: '#fee2e2',
+                              border: '1px solid #fca5a5',
+                              color: '#b91c1c',
+                              borderRadius: 6,
+                              padding: '6px 14px',
+                              fontWeight: 700,
+                              fontSize: 12,
+                              cursor: 'pointer',
+                              minHeight: 44,
+                            }}
+                            aria-label={`Remove part ${p.name}`}
+                          >
+                            {removingPartId === p._id ? 'Removing...' : 'Remove Part'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: 14 }}>
               <span>Parts Total:</span>
@@ -1265,8 +1368,10 @@ export default function RepairTicketDetailPage() {
             )}
           </div>
         </Card>
+      </div>
 
-        {/* Section 5: Invoice Settlement */}
+      {/* Section 5: Invoice Settlement */}
+      <div id="settlement-card">
         <Card title="Invoice & Billing Settlement">
           <div style={{ display: 'grid', gap: 10 }}>
             {ticket.isInvoiceSettled ? (
@@ -1349,8 +1454,9 @@ export default function RepairTicketDetailPage() {
             )}
           </div>
         </Card>
+      </div>
 
-        {/* Section 6: Warranty Period */}
+      {/* Section 6: Warranty Period */}
         <Card title="Warranty Management">
           <form onSubmit={handleSaveWarranty} style={{ display: 'grid', gap: 10 }}>
             <Field
@@ -1422,6 +1528,102 @@ export default function RepairTicketDetailPage() {
             )}
           </div>
         </Card>
+      </div>
+
+      {/* Sticky Mobile Action Bar for Technician Actions */}
+      <div
+        className="sticky-mobile-actions"
+        style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          zIndex: 40,
+          background: 'var(--surface, #ffffff)',
+          borderTop: '1px solid var(--border, #e2e8f0)',
+          padding: '10px 16px',
+          paddingBottom: 'max(10px, env(safe-area-inset-bottom, 10px))',
+          boxShadow: '0 -4px 16px rgba(0,0,0,0.1)',
+          display: 'none',
+          gap: 8,
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            document.getElementById('stage-workflow-card')?.scrollIntoView({ behavior: 'smooth' });
+          }}
+          style={{
+            flex: 1,
+            minHeight: 44,
+            borderRadius: 8,
+            border: '1px solid var(--brand, #2563eb)',
+            background: 'var(--tint, #eff6ff)',
+            color: 'var(--brand, #1d4ed8)',
+            fontWeight: 700,
+            fontSize: 13,
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 4,
+          }}
+        >
+          Stage: {ticket.stage} ▾
+        </button>
+
+        {!ticket.isInvoiceSettled && !isTerminal && canEdit && !(ticket.shopOwnedUnit && ['Ready', 'Delivered'].includes(ticket.stage)) && (
+          <button
+            type="button"
+            onClick={() => {
+              document.getElementById('parts-section-card')?.scrollIntoView({ behavior: 'smooth' });
+              setIsFreeTextPart(false);
+            }}
+            style={{
+              flex: 1,
+              minHeight: 44,
+              borderRadius: 8,
+              border: 'none',
+              background: 'var(--brand, #2563eb)',
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            + Add Part
+          </button>
+        )}
+
+        {ticket.stage === 'Ready' && !ticket.isInvoiceSettled && canApprove && (
+          <button
+            type="button"
+            onClick={() => {
+              document.getElementById('settlement-card')?.scrollIntoView({ behavior: 'smooth' });
+            }}
+            style={{
+              flex: 1,
+              minHeight: 44,
+              borderRadius: 8,
+              border: 'none',
+              background: 'var(--success, #16a34a)',
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            Settle Bill
+          </button>
+        )}
       </div>
 
       {/* Advance Cancellation Modal Dialog */}
@@ -1558,6 +1760,7 @@ function Shell({ children, user }) {
         {user && <User name={user} />}
       </AppHeader>
       <main
+        className="repairs-detail-main"
         style={{
           maxWidth: 1200,
           margin: '0 auto',
