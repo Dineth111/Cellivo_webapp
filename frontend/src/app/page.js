@@ -228,6 +228,7 @@ function Dashboard({ user, onLogout }) {
             <span className={styles.avatar} title={`${titleCase(user.name)} · ${user.role?.name ?? ''}`}>
               {firstName[0]}
             </span>
+            <Link className={styles.pill} href="/repairs">Repairs</Link>
             <Link className={styles.pill} href="/inventory">Inventory</Link>
             <Link className={styles.pill} href="/purchasing">Purchasing</Link>
             <Link className={styles.pill} href="/pos">POS Register</Link>

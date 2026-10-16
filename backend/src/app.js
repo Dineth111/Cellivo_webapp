@@ -26,6 +26,7 @@ import posCreditRoutes from './modules/pos/routes/credit.routes.js';
 import posFinanceRoutes from './modules/pos/routes/finance.routes.js';
 import posLoyaltyRoutes from './modules/pos/routes/loyalty.routes.js';
 import notificationRoutes from './modules/notifications/notifications.routes.js';
+import repairRoutes from './modules/repairs/repairs.routes.js';
 import inventoryRoutes from './modules/inventory/routes/inventory.routes.js';
 
 export function createApp() {
@@ -45,7 +46,7 @@ export function createApp() {
       health: '/api/health', auth: '/api/auth', users: '/api/users', roles: '/api/roles',
       branches: '/api/branches', audit: '/api/audit', customers: '/api/customers',
       billing: '/api/billing', signup: '/api/signup', public: '/api/public', admin: '/api/admin',
-      notifications: '/api/notifications',
+      notifications: '/api/notifications', repairs: '/api/repairs', inventory: '/api/inventory',
     },
   };
   app.get('/', (req, res) => (req.accepts(['json', 'html']) === 'html' ? res.send(landingHtml(index)) : res.json(index)));
@@ -64,6 +65,7 @@ export function createApp() {
   app.use('/api/billing', billingRoutes);
   app.use('/api/signup', signupRoutes);
   app.use('/api/notifications', notificationRoutes);
+  app.use('/api/repairs', repairRoutes);
   app.use('/api/public', publicRoutes);
   app.use('/api/admin', rateLimit({ windowMs: 15 * 60 * 1000, limit: config.authRateLimitMax, standardHeaders: true, legacyHeaders: false }), adminRoutes);
   app.use('/api/pos/ledger', posLedgerRoutes);

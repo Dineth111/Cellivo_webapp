@@ -18,7 +18,7 @@ const ACCESS_KEY = 'cellivo_jwt';
 const REFRESH_KEY = 'cellivo_refresh';
 
 // "Remember this device" keeps the session in localStorage, otherwise in sessionStorage.
-const stores = () => [localStorage, sessionStorage];
+const stores = () => (typeof window === 'undefined' ? [] : [localStorage, sessionStorage]);
 const findStore = () => stores().find((s) => s.getItem(REFRESH_KEY)) || null;
 
 export function saveSession({ token, refreshToken }, remember = true) {
@@ -78,7 +78,8 @@ export async function authFetch(path, options = {}) {
       ...options,
       headers: { 'Content-Type': 'application/json', ...options.headers, Authorization: `Bearer ${token}` },
     });
-  let res = await send((findStore() || localStorage).getItem(ACCESS_KEY));
+  const store = findStore() || (typeof window !== 'undefined' ? localStorage : null);
+  let res = await send(store?.getItem(ACCESS_KEY));
   if (res.status === 401) res = await send(await refreshAccessToken());
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -209,4 +210,68 @@ export const resendNotificationLog = (id) => authFetch(`/notifications/logs/${id
 export const getInAppNotifications = (query = '') => authFetch(`/notifications/in-app${query ? `?${query}` : ''}`);
 export const markInAppNotificationRead = (id) => authFetch(`/notifications/in-app/${id}/read`, { method: 'PATCH' });
 export const markAllInAppNotificationsRead = () => authFetch('/notifications/in-app/read-all', { method: 'POST' });
+
+// ---- Repairs (F-12 Dev 5) ---------------------------------------------------------------------
+export const getRepairsBoard = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([_, v]) => v !== undefined && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return authFetch(`/repairs/board${qs ? `?${qs}` : ''}`);
+};
+
+export const getRepairsOverdue = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([_, v]) => v !== undefined && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return authFetch(`/repairs/overdue${qs ? `?${qs}` : ''}`);
+};
+
+export const getRepairs = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([_, v]) => v !== undefined && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return authFetch(`/repairs${qs ? `?${qs}` : ''}`);
+};
+
+export const getRepairTicket = (id, { revealPasscode = false } = {}) =>
+  authFetch(`/repairs/${id}${revealPasscode ? '?revealPasscode=true' : ''}`);
+
+export const createRepairTicket = (data) =>
+  authFetch('/repairs', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateRepairTicket = (id, data) =>
+  authFetch(`/repairs/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const changeRepairStage = (id, data) =>
+  authFetch(`/repairs/${id}/stage`, { method: 'POST', body: JSON.stringify(data) });
+
+export const assignRepairTechnician = (id, technicianId) =>
+  authFetch(`/repairs/${id}/assign`, { method: 'POST', body: JSON.stringify({ technicianId }) });
+
+export const recordRepairApproval = (id, data) =>
+  authFetch(`/repairs/${id}/approval`, { method: 'POST', body: JSON.stringify(data) });
+
+export const addRepairPart = (id, partData) =>
+  authFetch(`/repairs/${id}/parts`, { method: 'POST', body: JSON.stringify(partData) });
+
+export const removeRepairPart = (id, partId) =>
+  authFetch(`/repairs/${id}/parts/${partId}`, { method: 'DELETE' });
+
+export const settleRepairInvoice = (id, data) =>
+  authFetch(`/repairs/${id}/invoice`, { method: 'POST', body: JSON.stringify(data) });
+
+export const setRepairWarranty = (id, days) =>
+  authFetch(`/repairs/${id}/warranty`, { method: 'POST', body: JSON.stringify({ days }) });
+
+export const getRepairJobCard = (id) =>
+  authFetch(`/repairs/${id}/jobcard`);
+
+export const getTechniciansWorkload = (branchId = '') =>
+  authFetch(`/repairs/technicians/workload${branchId ? `?branchId=${branchId}` : ''}`);
+
+export const getRepairsConfig = () =>
+  authFetch('/repairs/config');
+
+export const getBranches = () =>
+  authFetch('/branches');
+
+export const searchRepairParts = (ticketId, q = '') =>
+  authFetch(`/repairs/parts/search?ticketId=${encodeURIComponent(ticketId)}&q=${encodeURIComponent(q)}`);
 

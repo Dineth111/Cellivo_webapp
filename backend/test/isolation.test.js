@@ -27,6 +27,8 @@ import LoyaltySettings from '../src/modules/customers/LoyaltySettings.model.js';
 import NotificationTemplate from '../src/modules/notifications/models/NotificationTemplate.model.js';
 import NotificationLog from '../src/modules/notifications/models/NotificationLog.model.js';
 import InAppNotification from '../src/modules/notifications/models/InAppNotification.model.js';
+import RepairTicket from '../src/modules/repairs/models/RepairTicket.model.js';
+import RepairSequence from '../src/modules/repairs/models/RepairSequence.model.js';
 import Category from '../src/modules/inventory/models/Category.model.js';
 import Brand from '../src/modules/inventory/models/Brand.model.js';
 import ProductModel from '../src/modules/inventory/models/ProductModel.model.js';
@@ -77,6 +79,8 @@ const MODELS = {
   NotificationTemplate,
   NotificationLog,
   InAppNotification,
+  RepairTicket,
+  RepairSequence,
   Category,
   Brand,
   ProductModel,

@@ -1,0 +1,38 @@
+import mongoose from 'mongoose';
+import tenantPlugin from '../../../core/tenantPlugin.js';
+
+const repairSequenceSchema = new mongoose.Schema(
+  {
+    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', default: null, index: true },
+    prefix: { type: String, required: true, default: 'JOB-', trim: true },
+    seq: { type: Number, default: 0, min: 0 },
+  },
+  { timestamps: true }
+);
+
+repairSequenceSchema.plugin(tenantPlugin);
+repairSequenceSchema.index({ tenantId: 1, branchId: 1, prefix: 1 }, { unique: true });
+
+/**
+ * Atomically increments and returns the next sequential repair ticket number per branch.
+ * Concurrency safe, gapless, and never reused under parallel transactions.
+ * Returns formatted number e.g. "JOB-000001".
+ */
+repairSequenceSchema.statics.getNextNumber = async function (tenantId, branchId, prefix = 'JOB-', session = null) {
+  const tid = tenantId instanceof mongoose.Types.ObjectId ? tenantId : new mongoose.Types.ObjectId(String(tenantId));
+  const bid = branchId ? (branchId instanceof mongoose.Types.ObjectId ? branchId : new mongoose.Types.ObjectId(String(branchId))) : null;
+
+  const doc = await this.findOneAndUpdate(
+    { tenantId: tid, branchId: bid, prefix },
+    {
+      $inc: { seq: 1 },
+      $setOnInsert: { tenantId: tid, branchId: bid, prefix },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true, session }
+  );
+
+  const padded = String(doc.seq).padStart(6, '0');
+  return `${prefix}${padded}`;
+};
+
+export default mongoose.models.RepairSequence || mongoose.model('RepairSequence', repairSequenceSchema);
