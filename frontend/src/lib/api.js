@@ -116,6 +116,9 @@ export const updateAuthProfile = (profileData) =>
 // ---- sign-up (F-01) and billing (F-02, F-20) ----------------------------------------------------
 export const publicPlans = () => fetch(`${API_BASE}/public/plans`, { cache: 'no-store' }).then((r) => r.json()).then((d) => d.data || []);
 
+export const publicContact = (body) => post('/public/contact', body);
+export const publicDemo = (body) => post('/public/demo', body);
+
 export const signupStart = (form) => post('/signup/start', form);
 export const signupResend = (email) => post('/signup/resend', { email });
 export const signupVerify = (email, code) => post('/signup/verify', { email, code });

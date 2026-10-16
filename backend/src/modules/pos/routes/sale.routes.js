@@ -34,7 +34,7 @@ router.get(
       return res.json({ success: true, data: item });
     }
 
-    if (q) {
+    if (q !== undefined) { // empty q = browse the whole catalogue (POS loads this on open)
       const items = await stockAdapter.searchProducts(req.auth.tenantId, branchId, String(q).trim());
       return res.json({ success: true, data: items });
     }
