@@ -1,0 +1,92 @@
+[
+ {
+  "planKey": "starter",
+  "billingCycle": "monthly",
+  "lkrPrice": "7000",
+  "usdPrice": "25"
+ },
+ {
+  "planKey": "lite",
+  "billingCycle": "monthly",
+  "lkrPrice": "2900",
+  "usdPrice": "10"
+ },
+ {
+  "planKey": "starter",
+  "billingCycle": "yearly",
+  "lkrPrice": "70000",
+  "usdPrice": "250"
+ },
+ {
+  "planKey": "lite",
+  "billingCycle": "yearly",
+  "lkrPrice": "29000",
+  "usdPrice": "90"
+ },
+ {
+  "planKey": "starter",
+  "billingCycle": "lifetime",
+  "lkrPrice": "380000",
+  "usdPrice": "1300"
+ },
+ {
+  "planKey": "lite",
+  "billingCycle": "lifetime",
+  "lkrPrice": "149000",
+  "usdPrice": "450"
+ },
+ {
+  "planKey": "growth",
+  "billingCycle": "monthly",
+  "lkrPrice": "12000",
+  "usdPrice": "40"
+ },
+ {
+  "planKey": "growth",
+  "billingCycle": "yearly",
+  "lkrPrice": "120000",
+  "usdPrice": "400"
+ },
+ {
+  "planKey": "growth",
+  "billingCycle": "lifetime",
+  "lkrPrice": "500000",
+  "usdPrice": "1700"
+ },
+ {
+  "planKey": "business",
+  "billingCycle": "monthly",
+  "lkrPrice": "16000",
+  "usdPrice": "55"
+ },
+ {
+  "planKey": "business",
+  "billingCycle": "yearly",
+  "lkrPrice": "160000",
+  "usdPrice": "550"
+ },
+ {
+  "planKey": "business",
+  "billingCycle": "lifetime",
+  "lkrPrice": "700000",
+  "usdPrice": "2500"
+ },
+ {
+  "planKey": "unlimited",
+  "billingCycle": "monthly",
+  "lkrPrice": "",
+  "usdPrice": ""
+ },
+ {
+  "planKey": "unlimited",
+  "billingCycle": "yearly",
+  "lkrPrice": "",
+  "usdPrice": ""
+ },
+ {
+  "planKey": "unlimited",
+  "billingCycle": "lifetime",
+  "lkrPrice": "",
+  "usdPrice": ""
+ }
+]
