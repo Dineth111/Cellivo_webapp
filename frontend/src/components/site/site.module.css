@@ -25,7 +25,7 @@
 .logo { display: inline-flex; align-items: center; gap: 10px; font-family: var(--font-jakarta), sans-serif; font-weight: 800; letter-spacing: .06em; color: var(--fg); text-decoration: none; }
 .mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: var(--p); color: #fff; font-weight: 800; }
 .nav { display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 999px; background: hsl(220 14% 96% / .7); }
-.nav a { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: none; transition: all .2s; }
+.nav a { white-space: nowrap; display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: none; transition: all .2s; }
 .nav a:hover { color: var(--fg); }
 .nav a[aria-current='page'] { background: #fff; color: var(--fg); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
 .actions { display: flex; align-items: center; gap: 8px; }
@@ -144,9 +144,11 @@
 .legal { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 40px; padding-top: 20px; border-top: 1px solid hsl(0 0% 100% / .1); font-size: 13px; }
 .legal span { display: flex; gap: 16px; flex-wrap: wrap; }
 
-@media (max-width: 1023px) {
+@media (max-width: 1199px) {
   .nav, .hideSm { display: none; }
   .menu { display: block; }
+}
+@media (max-width: 1023px) {
   .heroGrid, .split, .contactGrid { grid-template-columns: 1fr; }
   .footGrid { grid-template-columns: 1fr 1fr; }
   .section { padding: 56px 0; }
