@@ -166,12 +166,12 @@ export default function HomePage() {
   );
 }
 
-export function CtaBand() {
+export function CtaBand({ title = 'Ready to run your shop the easy way?', text = 'Start your free trial today. No credit card, no setup call.' }) {
   return (
     <section className={styles.cta}>
       <div className={styles.wrap}>
-        <h2>Ready to run your shop the easy way?</h2>
-        <p>Start your free trial today. No credit card, no setup call.</p>
+        <h2>{title}</h2>
+        {text && <p>{text}</p>}
         <div className={styles.ctaRow}>
           <Link href="/pricing" className={styles.btnLight}>Start Free Trial</Link>
           <Link href="/pricing" className={styles.btnGhost}>View Pricing</Link>

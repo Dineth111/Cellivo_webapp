@@ -156,3 +156,58 @@
   .mockKpis { grid-template-columns: 1fr; }
   .footGrid { grid-template-columns: 1fr; }
 }
+
+/* content pages (landing / legal / blog) */
+.kicker { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 8px; }
+.kicker li { padding: 4px 12px; border-radius: 999px; background: #fef2f2; color: #b91c1c; font-size: 13px; font-weight: 500; }
+.small { font-size: 14px !important; margin-inline: auto; }
+.statRow { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px 48px; margin-top: 36px; }
+.statRow div { display: grid; text-align: center; }
+.statRow strong { font-family: var(--font-jakarta), sans-serif; font-size: 26px; color: var(--fg); }
+.statRow span { font-size: 13px; color: var(--muted); }
+.cardLink { display: block; text-decoration: none; color: inherit; }
+.cardLink h3 { color: var(--p); }
+.prose { width: min(780px, 100% - 2rem); margin-inline: auto; }
+.prose h1 { font-size: clamp(30px, 4.4vw, 48px); line-height: 1.12; font-weight: 700; margin: 16px 0 20px; }
+.prose h2 { font-size: 26px; font-weight: 700; margin: 40px 0 12px; }
+.prose h3 { font-size: 19px; font-weight: 600; margin: 28px 0 8px; }
+.prose p { color: hsl(220 9% 30%); margin-bottom: 14px; }
+.prose ul { margin: 0 0 16px 22px; color: hsl(220 9% 30%); display: grid; gap: 6px; }
+.prose .faq { margin-top: 12px; }
+.lead { font-size: 19px; color: var(--muted) !important; }
+.textLinkP { color: var(--p); font-weight: 500; font-size: 14px; text-decoration: none; }
+.article { background: #fff; }
+
+/* blog index */
+.posts { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.post { display: flex; flex-direction: column; gap: 10px; text-decoration: none; color: inherit; }
+.post h2 { font-size: 20px; line-height: 1.3; font-weight: 700; }
+.post span { margin-top: auto; color: var(--p); font-weight: 500; font-size: 14px; }
+
+/* header features dropdown */
+.drop { position: relative; }
+.drop summary { list-style: none; display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; }
+.drop summary::-webkit-details-marker { display: none; }
+.drop summary:hover, .drop[open] summary { color: var(--fg); }
+.dropPanel { position: absolute; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: min(640px, 90vw); display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 12px; background: #fff; border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 20px 40px -12px rgb(0 0 0 / .15); }
+.dropPanel a { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; text-decoration: none; min-height: auto !important; }
+.dropPanel a:hover { background: var(--sec); }
+.dropPanel strong { font-size: 14px; color: var(--fg); font-weight: 600; }
+.dropPanel small { font-size: 12px; color: var(--muted); }
+.dropAll { grid-column: 1 / -1; border-top: 1px solid var(--line); margin-top: 4px; }
+.dropAll strong { color: var(--p) !important; }
+
+/* customer logos strip */
+.logos { border-block: 1px solid hsl(220 13% 91% / .6); padding: 36px 0; overflow: hidden; }
+.logos p { text-align: center; font-family: var(--font-jakarta), sans-serif; font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+.marquee { display: flex; gap: 48px; width: max-content; animation: marquee 40s linear infinite; }
+.marquee span { font-family: var(--font-jakarta), sans-serif; font-weight: 700; font-size: 18px; color: #9ca3af; white-space: nowrap; }
+@keyframes marquee { to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .marquee { animation: none; flex-wrap: wrap; justify-content: center; width: auto; } }
+
+/* contact tabs */
+.tabs { display: inline-flex; padding: 4px; border-radius: 999px; background: var(--sec); margin-bottom: 16px; }
+.tabs button { min-height: 40px; padding: 0 18px; border: 0; border-radius: 999px; background: transparent; font: inherit; font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; }
+.tabs button[aria-pressed='true'] { background: #fff; color: var(--fg); box-shadow: 0 1px 2px rgb(0 0 0 / .1); }
+.err { padding: 12px 14px; border-radius: 10px; background: #fef2f2; color: #b91c1c; font-weight: 500; }
+.hp { position: absolute; left: -9999px; }
