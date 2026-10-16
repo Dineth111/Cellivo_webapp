@@ -307,5 +307,37 @@ export async function getDashboardMetrics({ period = 'today', branchId } = {}) {
   return res.data;
 }
 
+export async function getReportData(type, params = {}) {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') query.set(k, v);
+  }
+  const res = await authFetch(`/reports/${type}?${query.toString()}`);
+  return res.data;
+}
+
+export async function exportReportCsv(type, params = {}) {
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') query.set(k, v);
+  }
+  const store = findStore() || (typeof window !== 'undefined' ? localStorage : null);
+  const token = store?.getItem(ACCESS_KEY);
+  const res = await fetch(`${API_BASE}/reports/${type}/export?${query.toString()}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || 'Export failed');
+  }
+  const isTruncated = res.headers.get('x-export-truncated') === 'true';
+  const totalCount = res.headers.get('x-export-total') ? parseInt(res.headers.get('x-export-total'), 10) : null;
+  const blob = await res.blob();
+  blob.isTruncated = isTruncated;
+  blob.totalCount = totalCount;
+  return blob;
+}
+
 
 

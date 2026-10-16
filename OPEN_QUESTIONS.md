@@ -147,6 +147,14 @@ This document tracks cross-module questions, architectural assumptions, and revi
    - In `backend/src/app.js`, `app.set('trust proxy', config.trustProxy)` is only invoked when `config.trustProxy` is non-zero (defaults to 0). On Vercel / reverse proxies, if `TRUST_PROXY` is not enabled, `req.ip` resolves to the internal edge/proxy IP rather than the true client IP, which would cause all public status visitors through that proxy to share a single IP rate-limit bucket. Dev 1 should configure `TRUST_PROXY=1` in serverless production environments.
    - The rate limiter uses a shared MongoDB TTL collection (`public_rate_limits`) for distributed counters (60 req/15 min per IP; 10 failed manual attempts/15 min per ticket). Note that the in-memory fallback store is per-instance on serverless (degraded mode if DB is disconnected). If Dev 1 prefers an Upstash Redis store or Edge Middleware rate limiting in production, please advise.
 
+## Reports review (Dev 5)
+
+60. **F-17 Reports implementation & security.**
+   - All report aggregations (Sales, Inventory Valuation, Repairs, Receivables Aging) are strictly tenant-scoped (each pipeline starts with a `$match: { tenantId }`) and branch-scoped unless the caller holds `view_all_branches`.
+   - Date ranges are capped at 366 days max (wider queries reject with 400 `DATE_RANGE_EXCEEDED`) and evaluated against Asia/Colombo (UTC+5:30) date boundaries.
+   - Cost prices, margins, and profit metrics are masked (`null`) unless the caller holds `view_cost_margin`.
+   - CSV export requires `export_reports` special permission and escapes all formula injection vectors (`=`, `+`, `-`, `@`, `\t`, `\r`) on strings with a leading `'`.
+
 ### For Dev 2
 
 61. **Dashboard UI refactoring (frontend/src/app/page.js & frontend/src/components/dashboard/DashboardOverview.js).**
@@ -156,3 +164,4 @@ This document tracks cross-module questions, architectural assumptions, and revi
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.
 - Confirm DocumentSequence collection indexes (`tenantId`, `branchId`, `docType`) exist in production MongoDB replica set.
+
