@@ -629,6 +629,16 @@ export default function RepairTicketDetailPage() {
           <div><strong>Advance Deposited:</strong> {money(ticket.advanceCents || 0)} ({ticket.advancePaymentMethod || 'cash'})</div>
         </div>
 
+        <div style={{ border: '1px solid #ccc', padding: 12, borderRadius: 6, marginBottom: 24, background: '#fafafa' }}>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: 13, textTransform: 'uppercase' }}>Online Repair Tracking</h3>
+          <div style={{ fontSize: 12, color: '#333', marginBottom: 4 }}>
+            Visit to view live status updates for your repair:
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#1d4ed8', wordBreak: 'break-all' }}>
+            {typeof window !== 'undefined' ? `${window.location.origin}/status?token=${ticket.trackingToken || ''}` : `/status?token=${ticket.trackingToken || ''}`}
+          </div>
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 40, marginTop: 40, paddingTop: 20, borderTop: '1px dashed #999' }}>
           <div>
             <div style={{ borderBottom: '1px solid #000', height: 40, marginBottom: 6 }} />
@@ -647,14 +657,30 @@ export default function RepairTicketDetailPage() {
           ← Back to Repairs Board
         </Link>
 
-        <Button
-          type="button"
-          variant="secondary"
-          onClick={() => window.print()}
-          style={{ minHeight: 44, padding: '0 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
-        >
-          Print Job Card
-        </Button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {ticket.trackingToken && (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                const url = `${window.location.origin}/status?token=${ticket.trackingToken}`;
+                navigator.clipboard.writeText(url);
+                alert('Customer tracking link copied to clipboard!');
+              }}
+              style={{ minHeight: 44, padding: '0 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              Copy Tracking Link
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => window.print()}
+            style={{ minHeight: 44, padding: '0 20px', display: 'inline-flex', alignItems: 'center', gap: 8 }}
+          >
+            Print Job Card
+          </Button>
+        </div>
       </div>
 
       {/* Header Info */}

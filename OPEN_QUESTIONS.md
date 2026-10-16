@@ -143,6 +143,10 @@ This document tracks cross-module questions, architectural assumptions, and revi
 54. **Cashier permissions for invoice and delivery.**
    `POST /api/repairs/:id/invoice` is restricted to `repairs.approve` (branch manager, owner). Cashiers currently have `repairs: 'vc'` (view and create only). Please confirm whether cashiers should be permitted to invoice repairs and mark them `Delivered` at collection time, or if manager approval/role upgrade is required.
 
+59. **Public repair status rate limiting on serverless & trust proxy (For Dev 1).**
+   - In `backend/src/app.js`, `app.set('trust proxy', config.trustProxy)` is only invoked when `config.trustProxy` is non-zero (defaults to 0). On Vercel / reverse proxies, if `TRUST_PROXY` is not enabled, `req.ip` resolves to the internal edge/proxy IP rather than the true client IP, which would cause all public status visitors through that proxy to share a single IP rate-limit bucket. Dev 1 should configure `TRUST_PROXY=1` in serverless production environments.
+   - The rate limiter uses a shared MongoDB TTL collection (`public_rate_limits`) for distributed counters (60 req/15 min per IP; 10 failed manual attempts/15 min per ticket). Note that the in-memory fallback store is per-instance on serverless (degraded mode if DB is disconnected). If Dev 1 prefers an Upstash Redis store or Edge Middleware rate limiting in production, please advise.
+
 ## Go-live checklist
 
 - Before importing any real shop data, confirm every role has tradeInLimitCents set.

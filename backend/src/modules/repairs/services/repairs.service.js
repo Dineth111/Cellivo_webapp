@@ -1,5 +1,6 @@
+import crypto from 'crypto';
 import mongoose from 'mongoose';
-import RepairTicket from '../models/RepairTicket.model.js';
+import RepairTicket, { publicCodeHelper } from '../models/RepairTicket.model.js';
 import RepairSequence from '../models/RepairSequence.model.js';
 import Customer from '../../customers/Customer.model.js';
 import User from '../../users/User.model.js';
@@ -62,6 +63,18 @@ function isTransient(err) {
     err?.code === 112
   );
 }
+
+function isPublicCodeDuplicate(err) {
+  if (!err) return false;
+  const isDup = err.code === 11000 || err.codeName === 'DuplicateKey';
+  if (!isDup) return false;
+  return Boolean(
+    err.keyPattern?.publicCode ||
+    err.keyValue?.publicCode ||
+    String(err.message || '').includes('publicCode')
+  );
+}
+
 
 /**
  * Creates a repair ticket with atomic sequence numbering, customer lookup/creation (or shop-owned unit),
@@ -393,6 +406,8 @@ export async function createTicket({
             },
           ],
           internalNotes: internalNotes ? String(internalNotes).trim() : '',
+          trackingToken: crypto.randomBytes(24).toString('hex'),
+          publicCode: publicCodeHelper.generate(),
           createdBy: user._id,
         });
 
@@ -409,7 +424,7 @@ export async function createTicket({
         // preserve original error
       }
       session.endSession();
-      if (isTransient(err) && attempts < 5) {
+      if ((isTransient(err) || isPublicCodeDuplicate(err)) && attempts < 5) {
         await new Promise((r) => setTimeout(r, 20 + Math.random() * 50));
         continue;
       }
@@ -434,6 +449,7 @@ export async function createTicket({
           customer_name: resolvedCustomer.name,
           status: createdTicket.stage,
           shop: shopName,
+          public_code: createdTicket.publicCode,
         },
       });
     } catch (e) {
@@ -841,6 +857,7 @@ export async function changeStage({
           status: to,
           customer_name: customerName,
           shop: shopName,
+          public_code: updatedTicket.publicCode,
         },
       });
     } catch {
