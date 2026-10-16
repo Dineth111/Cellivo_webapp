@@ -10,7 +10,8 @@
     "seed": "node src/seed.js",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "normalize-phones": "node src/scripts/normalizeCustomerPhones.js"
+    "normalize-phones": "node src/scripts/normalizeCustomerPhones.js",
+    "seed:demo": "node src/seedDemo.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

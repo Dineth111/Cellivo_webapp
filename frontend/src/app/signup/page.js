@@ -62,7 +62,7 @@ function Signup() {
 
   return (
     <>
-      <AppHeader><Link href="/" style={{ fontWeight: 600 }}>Log in</Link></AppHeader>
+      <AppHeader><Link href="/login" style={{ fontWeight: 600 }}>Log in</Link></AppHeader>
       <main style={{ maxWidth: 560, margin: '0 auto', padding: '32px 16px 56px', display: 'grid', gap: 16 }}>
         <Card>
           <div style={{ textAlign: 'center', display: 'grid', gap: 8, justifyItems: 'center', marginBottom: 6 }}>

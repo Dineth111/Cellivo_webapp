@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import Product from '../../inventory/models/Product.model.js';
+import '../../inventory/models/Category.model.js'; // registers the model for populate('categoryId')
 import StockLevel from '../../inventory/models/StockLevel.model.js';
 import SerialUnit from '../../inventory/models/SerialUnit.model.js';
 import * as stockService from '../../inventory/services/stock.service.js';
@@ -68,6 +69,7 @@ export async function searchProducts(tenantId, branchId, query) {
       isArchived: false,
       $or: [{ name: reg }, { barcode: reg }, { sku: reg }],
     })
+      .populate('categoryId', 'name')
       .limit(50)
       .lean();
 

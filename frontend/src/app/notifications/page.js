@@ -171,7 +171,7 @@ export default function NotificationsPage() {
     return (
       <div style={{ maxWidth: 600, margin: '60px auto', padding: 20 }}>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to view notification settings.
+          Please <Link href="/login">log in</Link> to view notification settings.
         </Alert>
       </div>
     );

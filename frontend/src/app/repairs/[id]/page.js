@@ -526,7 +526,7 @@ export default function RepairTicketDetailPage() {
     return (
       <Shell>
         <Alert tone="warning">
-          Please <Link href="/">log in</Link> to view ticket details.
+          Please <Link href="/login">log in</Link> to view ticket details.
         </Alert>
       </Shell>
     );

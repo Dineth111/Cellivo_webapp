@@ -35,7 +35,7 @@ export default function Billing() {
   }, [load]);
 
   if (!loaded) return <Shell><Spinner /></Shell>;
-  if (!summary) return <Shell>{error ? <Alert tone="danger">{error}</Alert> : <Alert>Please <Link href="/">log in</Link> to see billing.</Alert>}</Shell>;
+  if (!summary) return <Shell>{error ? <Alert tone="danger">{error}</Alert> : <Alert>Please <Link href="/login">log in</Link> to see billing.</Alert>}</Shell>;
 
   const { plan, state } = summary;
   const act = async (fn, done) => {

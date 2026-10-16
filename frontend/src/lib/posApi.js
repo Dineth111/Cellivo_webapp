@@ -13,7 +13,7 @@ export function normalizeProduct(p) {
     _id: p._id,
     name: p.name,
     barcode: p.barcode || '',
-    category: p.category || 'General',
+    category: p.category || p.categoryId?.name || 'General',
     sellingPriceCents: Number(p.sellingPriceCents) || 0,
     requiresImei,
     availableImeis,

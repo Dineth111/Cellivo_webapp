@@ -300,7 +300,7 @@ export default function PosPage() {
 
   const filteredProducts = products.filter((p) => {
     if (selectedCategory === 'All') return true;
-    return p.category === selectedCategory;
+    return p.category.includes(selectedCategory); // "Parts" pill also matches "Spare Parts"
   });
 
   return (
